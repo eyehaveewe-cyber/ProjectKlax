@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - 'releases/**'
+      - 'tools/package_source.py'
       - '.github/workflows/publish-packages.yml'
   workflow_dispatch:
 permissions:
@@ -16,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Package editable Godot source
+        run: python3 tools/package_source.py
       - name: Assemble and verify tested packages
         run: |
           cat releases/windows-parts/ProjectKlax-Windows.zip.part* > releases/ProjectKlax-Windows.zip
@@ -29,3 +32,4 @@ jobs:
         run: |
           gh release view v0.1.0 >/dev/null 2>&1 || gh release create v0.1.0 --target "$GITHUB_SHA" --title "Project Klax 0.1" --notes "First playable xenobiology campaign: six worlds, twelve species, rover expeditions, specimen lab and two ending recommendations. WebGL tested; Windows build exported but not executed on Windows."
           gh release upload v0.1.0 releases/ProjectKlax-Windows.zip releases/ProjectKlax-Web.zip releases/SHA256SUMS.txt --clobber
+          gh release upload v0.1.0 releases/ProjectKlax-Godot-Source.zip releases/SOURCE-SHA256SUMS.txt --clobber
