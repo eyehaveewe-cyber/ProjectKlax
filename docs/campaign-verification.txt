@@ -1,0 +1,3 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+CAMPAIGN PASS: 182 checks against real main scene, six worlds, cargo/extraction/rescue, research/upgrades, tactical orders, rover and custom-path save recovery

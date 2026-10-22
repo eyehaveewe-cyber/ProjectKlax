@@ -8,11 +8,11 @@ Explore abandoned planetary colonies as a xenobiology field researcher. Observe 
 
 ## Start playing
 
-- [Windows package](releases/ProjectKlax-Windows.zip): extract the entire ZIP and run `ProjectKlax.exe`. Keep its accompanying `.pck` file beside it.
+- [Windows package](https://github.com/eyehaveewe-cyber/ProjectKlax/releases/download/v0.1.0/ProjectKlax-Windows.zip): extract the entire ZIP and run `ProjectKlax.exe`. Keep its accompanying `.pck` file beside it.
 - [Web package](releases/ProjectKlax-Web.zip): extract the ZIP and serve its folder with a local HTTP server, for example `python -m http.server 8000`. Open `http://localhost:8000`. Opening `index.html` directly from disk does not load the Godot Web build correctly.
 - From source: import `project.godot` in **Godot 4.7.2**, then press **F5**. No add-ons are required.
 
-The packages are generated from this repository; [SHA-256 checksums](releases/SHA256SUMS.txt) are included. The Windows package was exported but not run on Windows during this pass. There is no hosted play URL in this version. The Web build uses the single-threaded Compatibility renderer. Desktop keyboard and mouse are the supported controls.
+The packages are generated from this repository; Windows bytes also persist in `releases/windows-parts` and can be reconstructed with `python tools/assemble_windows.py`. [SHA-256 checksums](releases/SHA256SUMS.txt) are included. The Windows package was exported but not run on Windows during this pass. There is no hosted play URL in this version. The Web build uses the single-threaded Compatibility renderer. Desktop keyboard and mouse are the supported controls.
 
 ## Your first expedition
 

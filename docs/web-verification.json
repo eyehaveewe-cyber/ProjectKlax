@@ -1,0 +1,589 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "Native WebGL campaign launches",
+      "details": {
+        "buttons": [
+          {
+            "disabled": false,
+            "text": "Pulse [Space]",
+            "x": 107,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Lure [Q]",
+            "x": 259,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Rover [R]",
+            "x": 411,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Station [B]",
+            "x": 563.5,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Tactical [Tab]",
+            "x": 716,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Journal",
+            "x": 868,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Help",
+            "x": 1020,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Extract",
+            "x": 1172.5,
+            "y": 735.5
+          }
+        ],
+        "cargo": 0,
+        "creatures": 15,
+        "ecology_rounds": 0,
+        "ending": "",
+        "energy": 100,
+        "field_time": 2.63333333333333,
+        "health": 100,
+        "mode": "FIELD",
+        "mounted": false,
+        "oxygen": 100,
+        "paused": false,
+        "relays": [],
+        "research": {
+          "0": {
+            "analyzed": false,
+            "sampled": false,
+            "scanned": false
+          },
+          "1": {
+            "analyzed": false,
+            "sampled": false,
+            "scanned": false
+          }
+        },
+        "samples": [],
+        "scan_progress": 0,
+        "science": 0,
+        "tactical": false,
+        "target_id": "",
+        "target_kind": "",
+        "x": 0,
+        "z": 6
+      }
+    },
+    {
+      "name": "Keyboard moves researcher",
+      "details": {
+        "before": [
+          0,
+          6
+        ],
+        "after": [
+          2.85999941825867,
+          -1.45332992076874
+        ]
+      }
+    },
+    {
+      "name": "Holding E records a specimen",
+      "details": {
+        "buttons": [
+          {
+            "disabled": false,
+            "text": "Pulse [Space]",
+            "x": 107,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Lure [Q]",
+            "x": 259,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Rover [R]",
+            "x": 411,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Station [B]",
+            "x": 563.5,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Tactical [Tab]",
+            "x": 716,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Journal",
+            "x": 868,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Help",
+            "x": 1020,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Extract",
+            "x": 1172.5,
+            "y": 735.5
+          }
+        ],
+        "cargo": 0,
+        "creatures": 15,
+        "ecology_rounds": 1,
+        "ending": "",
+        "energy": 87.9666666666674,
+        "field_time": 8.04999999999998,
+        "health": 100,
+        "mode": "FIELD",
+        "mounted": false,
+        "oxygen": 100,
+        "paused": false,
+        "relays": [],
+        "research": {
+          "0": {
+            "analyzed": false,
+            "sampled": false,
+            "scanned": true
+          },
+          "1": {
+            "analyzed": false,
+            "sampled": false,
+            "scanned": false
+          }
+        },
+        "samples": [],
+        "scan_progress": 0.989270833333331,
+        "science": 5,
+        "tactical": false,
+        "target_distance": 9.63042736053467,
+        "target_id": "specimen-0-0",
+        "target_kind": "creature",
+        "target_species": 0,
+        "target_x": 10.9626016616821,
+        "target_z": -6.62454652786255,
+        "x": 2.85999941825867,
+        "z": -1.45332992076874
+      }
+    },
+    {
+      "name": "Normal movement and F collect live sample",
+      "details": {
+        "buttons": [
+          {
+            "disabled": false,
+            "text": "Pulse [Space]",
+            "x": 107,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Lure [Q]",
+            "x": 259,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Rover [R]",
+            "x": 411,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Station [B]",
+            "x": 563.5,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Tactical [Tab]",
+            "x": 716,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Journal",
+            "x": 868,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Help",
+            "x": 1020,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Extract",
+            "x": 1172.5,
+            "y": 735.5
+          }
+        ],
+        "cargo": 1,
+        "creatures": 15,
+        "ecology_rounds": 2,
+        "ending": "",
+        "energy": 100,
+        "field_time": 16.5000000000003,
+        "health": 100,
+        "mode": "FIELD",
+        "mounted": false,
+        "oxygen": 99.4243333333343,
+        "paused": false,
+        "relays": [],
+        "research": {
+          "0": {
+            "analyzed": false,
+            "sampled": false,
+            "scanned": true
+          },
+          "1": {
+            "analyzed": false,
+            "sampled": false,
+            "scanned": false
+          }
+        },
+        "samples": [],
+        "scan_progress": 0.144270833333321,
+        "science": 5,
+        "tactical": false,
+        "target_distance": 3.24319243431091,
+        "target_id": "specimen-0-0",
+        "target_kind": "creature",
+        "target_species": 0,
+        "target_x": 12.0841779708862,
+        "target_z": -10.3363265991211,
+        "x": 9.79333591461182,
+        "z": -8.12665843963623
+      }
+    },
+    {
+      "name": "Tactical mode responds to keyboard",
+      "details": {}
+    },
+    {
+      "name": "Pause freezes expedition clock",
+      "details": {
+        "before": 17.1366666666668,
+        "after": 17.1366666666668
+      }
+    },
+    {
+      "name": "Field journal opens",
+      "details": {}
+    },
+    {
+      "name": "Journal returns to expedition",
+      "details": {}
+    },
+    {
+      "name": "Lander extraction commits sample",
+      "details": {
+        "buttons": [
+          {
+            "disabled": false,
+            "text": "Field manual",
+            "x": 84.5,
+            "y": 189.5
+          },
+          {
+            "disabled": false,
+            "text": "New campaign",
+            "x": 206,
+            "y": 189.5
+          },
+          {
+            "disabled": false,
+            "text": "01  Vesper Reach\nSURVEY AVAILABLE",
+            "x": 826.399963378906,
+            "y": 115
+          },
+          {
+            "disabled": false,
+            "text": "02  Prism Grave\nSURVEY AVAILABLE",
+            "x": 1103.89990234375,
+            "y": 115
+          },
+          {
+            "disabled": false,
+            "text": "03  Pale Archive\nSURVEY AVAILABLE",
+            "x": 826.399963378906,
+            "y": 183
+          },
+          {
+            "disabled": false,
+            "text": "04  Cinder Choir\nSURVEY AVAILABLE",
+            "x": 1103.89990234375,
+            "y": 183
+          },
+          {
+            "disabled": false,
+            "text": "05  Undertow Station\nSURVEY AVAILABLE",
+            "x": 826.399963378906,
+            "y": 251
+          },
+          {
+            "disabled": true,
+            "text": "06  The Quiet Heart\nLOCKED",
+            "x": 1103.89990234375,
+            "y": 251
+          },
+          {
+            "disabled": false,
+            "text": "DEPLOY EXPEDITION   →",
+            "x": 964.899963378906,
+            "y": 521.5
+          },
+          {
+            "disabled": false,
+            "text": "Specimen lab",
+            "x": 825.899963378906,
+            "y": 573
+          },
+          {
+            "disabled": false,
+            "text": "Field journal",
+            "x": 1103.39990234375,
+            "y": 573
+          },
+          {
+            "disabled": false,
+            "text": "Dr. Mira Sen",
+            "x": 133,
+            "y": 493
+          },
+          {
+            "disabled": false,
+            "text": "Ivo Vale",
+            "x": 325,
+            "y": 493
+          },
+          {
+            "disabled": false,
+            "text": "Tamsin Osei",
+            "x": 517,
+            "y": 493
+          },
+          {
+            "disabled": true,
+            "text": "Coherent scanner\n30 RP · LEVEL 0/3",
+            "x": 137.5,
+            "y": 687
+          },
+          {
+            "disabled": true,
+            "text": "Closed-loop oxygen\n25 RP · LEVEL 0/3",
+            "x": 338.5,
+            "y": 687
+          },
+          {
+            "disabled": true,
+            "text": "Adaptive suit lining\n30 RP · LEVEL 0/3",
+            "x": 539.5,
+            "y": 687
+          },
+          {
+            "disabled": true,
+            "text": "Rover reinforcement\n35 RP · LEVEL 0/3",
+            "x": 740.5,
+            "y": 687
+          },
+          {
+            "disabled": true,
+            "text": "Pheromone library\n25 RP · LEVEL 0/3",
+            "x": 941.5,
+            "y": 687
+          },
+          {
+            "disabled": true,
+            "text": "Sterile sample racks\n30 RP · LEVEL 0/3",
+            "x": 1142.5,
+            "y": 687
+          },
+          {
+            "disabled": false,
+            "text": "Open laboratory",
+            "x": 640,
+            "y": 494
+          },
+          {
+            "disabled": false,
+            "text": "Return to mission deck",
+            "x": 640,
+            "y": 549
+          }
+        ],
+        "ending": "",
+        "mode": "HUB",
+        "paused": false,
+        "relays": [],
+        "research": {
+          "0": {
+            "analyzed": false,
+            "sampled": true,
+            "scanned": true
+          },
+          "1": {
+            "analyzed": false,
+            "sampled": false,
+            "scanned": false
+          }
+        },
+        "samples": [
+          0
+        ],
+        "science": 9,
+        "tactical": false
+      }
+    },
+    {
+      "name": "Assay opens by mouse",
+      "details": {}
+    },
+    {
+      "name": "Escape cancels assay without losing specimen",
+      "details": {}
+    },
+    {
+      "name": "Lab analysis awards permanent research",
+      "details": {}
+    },
+    {
+      "name": "Browser reload restores analyzed specimen",
+      "details": {}
+    },
+    {
+      "name": "R boards nearby rover",
+      "details": {}
+    },
+    {
+      "name": "Rover throttle and boost move the vehicle",
+      "details": {
+        "buttons": [
+          {
+            "disabled": false,
+            "text": "Pulse [Space]",
+            "x": 107,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Lure [Q]",
+            "x": 259,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Rover [R]",
+            "x": 411,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Station [B]",
+            "x": 563.5,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Tactical [Tab]",
+            "x": 716,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Journal",
+            "x": 868,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Help",
+            "x": 1020,
+            "y": 735.5
+          },
+          {
+            "disabled": false,
+            "text": "Extract",
+            "x": 1172.5,
+            "y": 735.5
+          }
+        ],
+        "cargo": 0,
+        "creatures": 15,
+        "ecology_rounds": 0,
+        "ending": "",
+        "energy": 100,
+        "field_time": 1.96666666666666,
+        "health": 100,
+        "mode": "FIELD",
+        "mounted": true,
+        "oxygen": 100,
+        "paused": false,
+        "relays": [],
+        "research": {
+          "0": {
+            "analyzed": true,
+            "bonus": 0,
+            "sampled": true,
+            "scanned": true
+          },
+          "1": {
+            "analyzed": false,
+            "sampled": false,
+            "scanned": false
+          }
+        },
+        "samples": [
+          0
+        ],
+        "scan_progress": 0,
+        "science": 27,
+        "tactical": false,
+        "target_distance": 7.93926572799683,
+        "target_id": "specimen-0-0",
+        "target_kind": "creature",
+        "target_species": 0,
+        "target_x": 8.70845317840576,
+        "target_z": -9.19875049591064,
+        "x": 5,
+        "z": -2.19201040267944
+      }
+    },
+    {
+      "name": "R dismounts rover",
+      "details": {}
+    },
+    {
+      "name": "No browser or engine errors",
+      "details": []
+    }
+  ],
+  "errors": []
+}

@@ -1,0 +1,166 @@
+class_name NaturalWorld
+extends RefCounted
+
+# Wildlife reads habitat and local occupation, not civilian roads or settlement policy.
+# Counters and positions live in snapshots; drawing a deer has no simulation effect.
+static func rules(catalog: ContentCatalog) -> Dictionary:
+	return catalog.world_rules.get("nature", {})
+
+static func setup(state: GameState, catalog: ContentCatalog) -> void:
+	var nature = {"enabled": bool(catalog.world_rules.get("autonomous", {}).get("enabled", true)), "herds": [], "grazed_tiles": {}, "fields": {}, "last_resolved_round": 0}
+	var keys = state.data.tiles.keys()
+	keys.sort()
+	for key in keys:
+		if state.tile(key).terrain_id != "farmland": continue
+		var owner = field_owner(state, key, int(rules(catalog).get("field_radius", 3)))
+		if not owner.is_empty(): nature.fields[key] = {"settlement_id": owner, "abandoned_rounds": 0, "regrown": false}
+	# Seed away from opening crises; seed selection remains valid on differently sized maps.
+	var preferred = ["9,10", "3,10"]
+	var used = {}
+	for index in range(int(rules(catalog).get("herd_count", 2))):
+		var key = preferred[index] if index < preferred.size() and state.data.tiles.has(preferred[index]) else ""
+		if key.is_empty() or state.tile(key).terrain_id == "water" or used.has(key):
+			key = ""
+			for candidate in keys:
+				if state.tile(candidate).terrain_id != "water" and not used.has(candidate) and state.tile(candidate).settlement_id.is_empty():
+					key = candidate
+					break
+		if key.is_empty(): break
+		used[key] = true
+		nature.herds.append({"id": "deer_%d" % (index + 1), "species": "deer", "size": int(rules(catalog).get("herd_size", 3)),
+			"tile_id": key, "residency": 0, "reason": "Browsing near the woodland edge; herds seek rested dry habitat."})
+	state.data["nature"] = nature
+
+static func field_owner(state: GameState, key: String, radius: int) -> String:
+	var result = ""
+	var best = radius + 1
+	var ids = state.data.settlements.keys()
+	ids.sort()
+	for id in ids:
+		var distance = EffectSystem.distance(state.tile(key).coord, state.tile(state.data.settlements[id].tile_id).coord)
+		if distance < best:
+			best = distance
+			result = id
+	return result
+
+static func grazing_pressure(state: GameState, key: String) -> int:
+	if not bool(state.data.get("nature", {}).get("enabled", false)): return 0
+	if state.tile(key).get("terrain_id", "") != "farmland": return 0
+	for herd in state.data.get("nature", {}).get("herds", []):
+		if herd.tile_id == key: return 1
+	return 0
+
+static func human_pressure(state: GameState, key: String) -> int:
+	var tile = state.tile(key)
+	var pressure = int(tile.development.stage) * 3 + tile.building_ids.size() * 2
+	if not tile.settlement_id.is_empty() and int(state.data.settlements[tile.settlement_id].population) > 0: pressure += 6
+	if PopulationMovement.at(state, key) > 0: pressure += 6
+	return pressure
+
+static func habitat_score(state: GameState, key: String) -> int:
+	var terrain = state.tile(key).terrain_id
+	var score = 6 if terrain == "forest" else (5 if terrain == "farmland" else 3)
+	if ImperialPolicy.is_reserved(state, key): score += int(state.data.court.wildlife_habitat_bonus)
+	return score - human_pressure(state, key) - int(state.data.nature.grazed_tiles.get(key, 0)) * 4
+
+static func resolve(state: GameState, catalog: ContentCatalog) -> void:
+	var nature: Dictionary = state.data.nature
+	if not nature.enabled: return
+	var round_id = int(state.data.match.round_id)
+	if int(nature.last_resolved_round) == round_id: return
+	nature.last_resolved_round = round_id
+	var occupied = {}
+	for herd in nature.herds: occupied[herd.tile_id] = true
+	var browsed = nature.grazed_tiles.keys()
+	browsed.sort()
+	for key in browsed:
+		if occupied.has(key): continue
+		nature.grazed_tiles[key] = int(nature.grazed_tiles[key]) - 1
+		if int(nature.grazed_tiles[key]) <= 0: nature.grazed_tiles.erase(key)
+	var herds: Array = nature.herds
+	herds.sort_custom(func(a, b): return str(a.id).naturalnocasecmp_to(str(b.id)) < 0)
+	for herd in herds:
+		var source = str(herd.tile_id)
+		var browse_rounds = int(state.data.court.protected_browse_rounds) if ImperialPolicy.is_reserved(state, source) else 2
+		herd.residency = mini(browse_rounds, int(herd.residency) + 1)
+		var disturbed = human_pressure(state, source) > 0
+		if not disturbed and int(herd.residency) < browse_rounds: continue
+		var target = ""
+		var best = -1000
+		for key in TileDevelopment.neighbors(state, source):
+			if state.tile(key).terrain_id == "water" or occupied.has(key): continue
+			var score = habitat_score(state, key)
+			if score > best:
+				best = score
+				target = key
+		if target.is_empty():
+			herd.reason = "Local browse is depleted, but no unoccupied dry neighboring habitat is available."
+			continue
+		# Avoid fleeing human activity into a busier destination when no better refuge exists.
+		if disturbed and best <= habitat_score(state, source):
+			herd.reason = "Human activity disturbs this herd; neighboring habitat offers no quieter refuge."
+			continue
+		nature.grazed_tiles[source] = int(rules(catalog).get("pasture_rest_rounds", 3))
+		occupied.erase(source)
+		occupied[target] = true
+		herd.tile_id = target
+		herd.residency = 0
+		var pasture = "rested" if not nature.grazed_tiles.has(target) else "partly recovering"
+		herd.reason = "Human activity at %s drove the herd toward quieter %s habitat at %s." % [source, state.tile(target).terrain_id, target] if disturbed else "%s rounds of browsing depleted forage at %s; the herd moved to %s %s habitat at %s." % ["Three protected" if browse_rounds == 3 else "Two", source, pasture, state.tile(target).terrain_id, target]
+		if ImperialPolicy.is_reserved(state, target): herd.reason += " The Royal Wood offers quieter protected habitat."
+		state.remember("animal_migration", target, "%s (%d deer): %s%s" % [herd.id, herd.size, herd.reason, " Crops now face grazing pressure +1." if grazing_pressure(state, target) > 0 else ""], catalog)
+	resolve_succession(state, catalog)
+
+static func resolve_succession(state: GameState, catalog: ContentCatalog) -> void:
+	var threshold = int(rules(catalog).get("succession_rounds", 5))
+	var keys = state.data.nature.fields.keys()
+	keys.sort()
+	for key in keys:
+		var field: Dictionary = state.data.nature.fields[key]
+		if field.regrown: continue
+		var tile = state.tile(key)
+		# New settlements can work an old settlement's fields. Original ownership is
+		# history, not permission to regrow a currently occupied farm.
+		var owner: Dictionary = state.data.settlements[field.settlement_id]
+		var current = EconomyWorld.land_owner(state, key)
+		var tended = not current.is_empty() and int(state.data.settlements[current].population) > 0
+		var untended = int(owner.population) == 0 and not tended and tile.terrain_id == "farmland" and int(tile.development.stage) == 0 and tile.building_ids.is_empty() and PopulationMovement.at(state, key) == 0
+		field.abandoned_rounds = mini(threshold, int(field.abandoned_rounds) + 1) if untended else 0
+		if int(field.abandoned_rounds) < threshold: continue
+		tile.terrain_id = "forest"
+		field.regrown = true
+		state.remember("woodland_return", key, "%s farmland at %s was untended for %d empty rounds; woodland returned. This tile no longer supplies crops and now offers deer habitat." % [field.settlement_id, key, threshold], catalog)
+
+static func validate(value: Dictionary, catalog: ContentCatalog) -> String:
+	if not value.get("nature") is Dictionary: return "Missing natural-world state."
+	var nature: Dictionary = value.nature
+	if not nature.get("enabled") is bool or nature.enabled != bool(catalog.world_rules.get("autonomous", {}).get("enabled", true)): return "Invalid natural-world activation."
+	if not nature.get("herds") is Array or not nature.get("grazed_tiles") is Dictionary or not nature.get("fields") is Dictionary: return "Invalid natural-world collections."
+	if not nature.get("last_resolved_round") is int or nature.last_resolved_round < 0 or nature.last_resolved_round > value.match.round_id: return "Invalid natural-world round."
+	if nature.herds.size() != int(rules(catalog).get("herd_count", 2)): return "Incorrect deer herd count."
+	var used = {}
+	var ids = {}
+	for herd in nature.herds:
+		if not herd is Dictionary: return "Invalid deer herd."
+		if not herd.get("id") is String or herd.id != "deer_%d" % (ids.size() + 1): return "Invalid deer identity."
+		if herd.get("species") != "deer" or not herd.get("size") is int or herd.size != int(rules(catalog).get("herd_size", 3)): return "Invalid deer population."
+		if not herd.get("tile_id") is String or not value.tiles.has(herd.tile_id) or value.tiles[herd.tile_id].terrain_id == "water" or used.has(herd.tile_id): return "Invalid deer habitat."
+		if not herd.get("reason") is String or herd.reason.length() > 600: return "Invalid deer movement reason."
+		var protected_here = bool(value.get("court", {}).get("enabled", false)) and herd.tile_id in value.get("court", {}).get("royal_woods", [])
+		if not herd.get("residency") is int or herd.residency < 0 or herd.residency > (3 if protected_here else 2): return "Invalid deer browsing counter."
+		used[herd.tile_id] = true
+		ids[herd.id] = true
+	if nature.grazed_tiles.size() > value.tiles.size(): return "Too many browsed habitats."
+	for key in nature.grazed_tiles:
+		if not value.tiles.has(key) or value.tiles[key].terrain_id == "water": return "Invalid browsed habitat."
+		var remaining = nature.grazed_tiles[key]
+		if not remaining is int or remaining < 1 or remaining > int(rules(catalog).get("pasture_rest_rounds", 3)): return "Invalid pasture recovery counter."
+	if nature.fields.size() > value.tiles.size(): return "Too many original fields."
+	for key in nature.fields:
+		var field = nature.fields[key]
+		if not value.tiles.has(key) or not field is Dictionary or not value.settlements.has(field.get("settlement_id")): return "Invalid abandoned field."
+		if not field.get("abandoned_rounds") is int or field.abandoned_rounds < 0 or field.abandoned_rounds > int(rules(catalog).get("succession_rounds", 5)) or not field.get("regrown") is bool: return "Invalid succession counter."
+		if field.regrown and (value.tiles[key].terrain_id != "forest" or field.abandoned_rounds != int(rules(catalog).get("succession_rounds", 5))): return "Invalid woodland return."
+		if not field.regrown and value.tiles[key].terrain_id != "farmland": return "Original field terrain mismatch."
+	return ""
+

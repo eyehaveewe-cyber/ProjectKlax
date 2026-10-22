@@ -1,0 +1,98 @@
+class_name TileDevelopment
+extends RefCounted
+
+# Development consumes resolved conditions and channels, never presentation state.
+static func stage_name(stage: int, catalog: ContentCatalog) -> String:
+	return catalog.world_rules.development.stages[stage]
+
+static func needs(state: GameState, catalog: ContentCatalog, effects: Dictionary, key: String) -> Array:
+	var rules = catalog.world_rules.development
+	var reasons = []
+	var origin = state.tile(key).development.origin
+	if not origin.is_empty() and (int(state.data.settlements[origin].population) == 0 or state.data.settlements[origin].lifecycle == "recovering"): reasons.append("origin settlement needs resettlement")
+	if ResourceSites.enabled(catalog) and not origin.is_empty():
+		var next_stage = mini(3, int(state.tile(key).development.stage) + 1)
+		var required_households = int(rules.get("minimum_households", [0, 2, 4, 6])[next_stage])
+		var residents = int(state.data.settlements[origin].population)
+		if residents < required_households:
+			reasons.append("needs %d resident households for %s; %d present" % [required_households, stage_name(next_stage, catalog), residents])
+	var severity = 0
+	for c in state.conditions_at(key): severity = maxi(severity, int(c.severity))
+	if severity > int(rules.max_growth_severity): reasons.append("conditions must be severity 1 or lower")
+	if int(effects[key].get("security", 0)) < int(rules.security_required): reasons.append("needs security +1")
+	var food = int(effects[key].get("food_buffer", 0)) + int(effects[key].get("transport_capacity", 0))
+	var required = int(rules.food_required) + WorldResolver.supply_pressure(state, effects, key, catalog)
+	if food < required: reasons.append("needs food support %d (including pressure)" % required)
+	return reasons
+
+static func resolve(state: GameState, catalog: ContentCatalog) -> void:
+	var rules = catalog.world_rules.development
+	var effects = {}
+	for key in state.data.tiles: effects[key] = EffectSystem.at(state, catalog, key)
+	var keys = state.data.tiles.keys()
+	keys.sort()
+	var expansions: Array = []
+	for key in keys:
+		var tile = state.tile(key)
+		var dev: Dictionary = tile.development
+		var before = int(dev.stage)
+		if before == 0: continue
+		if not tile.settlement_id.is_empty() and state.data.settlements[tile.settlement_id].lifecycle == "resettled": continue
+		var severe = state.conditions_at(key).any(func(c): return int(c.severity) >= int(rules.decline_severity))
+		dev.decline = int(dev.decline) + 1 if severe else 0
+		var reason = ""
+		var blockers = needs(state, catalog, effects, key)
+		if int(dev.decline) >= int(rules.decline_rounds):
+			dev.stage = maxi(1 if not tile.settlement_id.is_empty() else 0, before - 1)
+			dev.decline = 0
+			dev.growth = 0
+			reason = "Two severe rounds caused contraction. Buildings and roads remain." if int(dev.stage) < before else "Severe conditions prevent recovery. The named settlement remains a hamlet."
+		elif blockers.is_empty():
+			var threshold = int(rules.expansion_rounds) if before == 3 else int(rules.growth_rounds)
+			dev.growth = mini(threshold, int(dev.growth) + 1)
+			reason = "Supported and stable: %d/%d rounds toward %s." % [dev.growth, threshold, "expansion" if before == 3 else "growth"]
+			if int(dev.growth) >= threshold:
+				if before < 3:
+					dev.stage += 1
+					dev.growth = 0
+					reason = "Sustained security, food support and manageable conditions allowed growth."
+				else:
+					var target = expansion_target(state, catalog, effects, key, expansions)
+					if target.is_empty(): reason = "Ready to expand; needs an empty, supported adjacent plains tile."
+					elif expansions.size() >= int(rules.max_expansions_per_round): reason = "Ready to expand; province limit is one new district per round."
+					else:
+						expansions.append({"source": key, "target": target, "origin": dev.origin})
+						dev.growth = 0
+						reason = "Settlement expanded into a new hamlet at " + target + "."
+		else:
+			dev.growth = 0
+			reason = "Growth paused: " + "; ".join(blockers) + "."
+		state.data.last_round_report.development.append({"target_id": key, "before": before, "after": int(dev.stage), "growth": int(dev.growth), "reason": reason})
+		if before != int(dev.stage):
+			state.log_event("%s (%s): %s -> %s. %s" % [dev.origin, key, stage_name(before, catalog), stage_name(dev.stage, catalog), reason])
+	# New districts cannot grow or expand in the round in which they appear.
+	for expansion in expansions:
+		var tile = state.tile(expansion.target)
+		tile.development = {"stage": 1, "growth": 0, "decline": 0, "origin": expansion.origin}
+		if not "road" in tile.tags: tile.tags.append("road")
+		state.data.last_round_report.development.append({"target_id": expansion.target, "before": 0, "after": 1, "growth": 0, "reason": "New district of %s, connected to %s by road." % [expansion.origin, expansion.source]})
+		state.log_event("%s spreads to %s: a new hamlet and road connection." % [expansion.origin, expansion.target])
+
+static func expansion_target(state: GameState, catalog: ContentCatalog, effects: Dictionary, source: String, pending: Array = []) -> String:
+	for key in neighbors(state, source):
+		var t = state.tile(key)
+		if int(t.development.stage) > 0 or not t.settlement_id.is_empty() or not t.building_ids.is_empty(): continue
+		if not t.terrain_id in catalog.world_rules.development.expansion_terrain or not t.condition_ids.is_empty(): continue
+		if pending.any(func(e): return e.target == key): continue
+		if needs(state, catalog, effects, key).is_empty(): return key
+	return ""
+
+static func neighbors(state: GameState, key: String) -> Array:
+	var xy = state.tile(key).coord
+	var result = []
+	for d in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+		var target = GameState.tile_id(int(xy[0]) + d[0], int(xy[1]) + d[1])
+		if not state.tile(target).is_empty(): result.append(target)
+	result.sort()
+	return result
+

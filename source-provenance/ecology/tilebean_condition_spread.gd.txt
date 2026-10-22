@@ -1,0 +1,32 @@
+class_name ConditionSpread
+extends RefCounted
+
+# All exposures use the start-of-resolution condition set. New infections are staged.
+static func proposals(state: GameState, catalog: ContentCatalog, original: Array, effects: Dictionary, report: Dictionary) -> Array:
+	var pending: Array = []
+	var keys = state.data.tiles.keys()
+	keys.sort()
+	var sources = original.duplicate(true)
+	sources.sort_custom(func(a, b): return a.instance_id < b.instance_id)
+	for c in sources:
+		var rule: Dictionary = catalog.world_rules.spread.get(c.definition_id, {})
+		if c.definition_id == "human_epidemic" and not PopulationMovement.inhabited(state, c.target_id): continue
+		if rule.is_empty() or int(c.severity) < int(rule.minimum_severity): continue
+		for target in keys:
+			if target == c.target_id: continue
+			if original.any(func(other): return other.definition_id == c.definition_id and other.target_id == target): continue
+			var t = state.tile(target)
+			var adjacent = EffectSystem.distance(state.tile(c.target_id).coord, t.coord) == 1
+			if rule.route == "adjacent_farmland":
+				if not adjacent or t.terrain_id != "farmland": continue
+			elif rule.route == "developed_roads":
+				if not PopulationMovement.inhabited(state, target): continue
+				if not adjacent and not EffectSystem.road_connected(state, c.target_id, target): continue
+			else: continue
+			var mitigation = int(effects[c.target_id].get(rule.mitigation_channel, 0)) + int(effects[target].get(rule.mitigation_channel, 0))
+			var chance = clampi(int(rule.base_chance) + int(c.severity) * int(rule.chance_per_severity) - mitigation * int(rule.mitigation_per_point), 0, 100)
+			var spread = WorldResolver.roll(state, c.instance_id + ":spread:" + target, chance)
+			report.spread.append({"definition_id": c.definition_id, "source": c.target_id, "target_id": target, "chance": chance, "spread": spread})
+			if spread: pending.append([c.definition_id, target, "%s spread from %s via %s" % [catalog.conditions[c.definition_id].display_name, c.target_id, "adjacent crops" if rule.route == "adjacent_farmland" else "settlement contact/roads"]])
+	return pending
+

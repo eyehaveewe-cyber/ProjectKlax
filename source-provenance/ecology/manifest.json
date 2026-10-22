@@ -1,0 +1,50 @@
+[
+  {
+    "repository": "eyehaveewe-cyber/Tilebean",
+    "ref": "4228a34233579ce36104d25739cdcdce1ef7bfc5",
+    "path": "simulation/condition_spread.gd",
+    "blob": "3af5aac0446f38fdce349a446824ed2e1eaa56d0",
+    "retained_as": "source-provenance/ecology/tilebean_condition_spread.gd.txt",
+    "use": "adapted-runtime"
+  },
+  {
+    "repository": "eyehaveewe-cyber/Tilebean",
+    "ref": "4228a34233579ce36104d25739cdcdce1ef7bfc5",
+    "path": "simulation/natural_world.gd",
+    "blob": "5ef34df9e029b677b67a9bc5ce8c91c9e2e96c66",
+    "retained_as": "source-provenance/ecology/tilebean_natural_world.gd.txt",
+    "use": "adapted-runtime"
+  },
+  {
+    "repository": "eyehaveewe-cyber/Tilebean",
+    "ref": "4228a34233579ce36104d25739cdcdce1ef7bfc5",
+    "path": "simulation/tile_development.gd",
+    "blob": "c3ff696b7ab27347117e70245df3a81791cf8bf9",
+    "retained_as": "source-provenance/ecology/tilebean_development.gd.txt",
+    "use": "adapted-runtime"
+  },
+  {
+    "repository": "eyehaveewe-cyber/Zen-Elysium",
+    "ref": "3932b0ba03910c4dd67e1c01499f69423593b694",
+    "path": "world/skills/rogue_lab_progression.gd",
+    "blob": "e24e18f1bd28d902e9132d6c27244566a2d978b5",
+    "retained_as": "source-provenance/ecology/zen_progression.gd.txt",
+    "use": "reference-only"
+  },
+  {
+    "repository": "eyehaveewe-cyber/Zen-Elysium",
+    "ref": "3932b0ba03910c4dd67e1c01499f69423593b694",
+    "path": "world/test_room_rng.gd",
+    "blob": "9ff579d39cdb6af4a4fefa0b84efd55330506ec6",
+    "retained_as": "source-provenance/ecology/zen_test_room_rng.gd",
+    "use": "unchanged-runtime"
+  },
+  {
+    "repository": "eyehaveewe-cyber/Zen-Elysium",
+    "ref": "3932b0ba03910c4dd67e1c01499f69423593b694",
+    "path": "world/weather/rogue_lab_weather.gd",
+    "blob": "abfa686bd5b926d093cdd81f238492db4890c2d0",
+    "retained_as": "source-provenance/ecology/zen_weather.gd",
+    "use": "unchanged-runtime"
+  }
+]

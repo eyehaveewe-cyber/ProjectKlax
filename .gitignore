@@ -1,0 +1,10 @@
+.godot/
+build/
+*.tmp
+*.log
+__pycache__/
+.DS_Store
+docs/screenshots/*.import
+docs/screenshots/failure.png
+releases/.*
+releases/ProjectKlax-Windows.zip

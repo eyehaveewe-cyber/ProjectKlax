@@ -1,0 +1,1884 @@
+class_name GlyphRacer
+extends Node3D
+## An arcade hover-racer. The race controller advances this object explicitly.
+## Route geometry supplies a road surface; velocity remains continuous in 3D.
+
+const BODY_RADIUS: float = 0.95
+const HOVER_HEIGHT: float = 0.82
+const NORMAL_TOP_SPEED: float = 65.0
+const BOOST_TOP_SPEED: float = 103.0
+const GRAVITY: float = 28.0
+const DRIFT_THRESHOLDS: Array[float] = [0.12, 0.55, 1.3]
+const RAM_RANGE: float = 6.5
+const RAM_HIT_RANGE: float = 5.6
+const RAM_WINDUP_TIME: float = 0.28
+const RAM_COOLDOWN: float = 3.8
+const CONTACT_PAIR_GUARD: float = 0.38
+const CONTACT_RECOVERY_LIMIT: float = 2.8
+
+var velocity: Vector3 = Vector3.ZERO
+var speed: float = 0.0
+var heading: float = 0.0
+var boost_energy: float = 100.0
+var boosting: bool = false
+var airborne: bool = false
+var route_distance: float = 0.0
+var lateral_offset: float = 0.0
+var total_progress: float = 0.0
+var last_event: String = ""
+var event_serial: int = 0
+var _event_queue: Array[String] = []
+var drift_amount: float = 0.0
+var drifting: bool = false
+var bracing: bool = false
+var drift_charge: float = 0.0
+var drift_stage: int = 0
+var last_drift_stage: int = 0
+var ram_cooldown: float = 0.0
+var ram_windup: float = 0.0
+var route_id: String = "main"
+var route_local_distance: float = 0.0
+var frame_up: Vector3 = Vector3.UP
+var frame_right: Vector3 = Vector3.RIGHT
+var frame_forward: Vector3 = Vector3.FORWARD
+var camera_heading: float = 0.0
+var controls_locked: bool = false
+var vent_active: bool = false
+var route_seed: int = 0
+
+var _track: RacerTrack
+var _visual: RacerCosmetics
+var _tint: Color = Color.CYAN
+var _configured: bool = false
+var _previous_distance: float = 0.0
+var _pad_boost_time: float = 0.0
+var _boost_pad_cooldown: float = 0.0
+var _jump_pad_cooldown: float = 0.0
+var _wall_cooldown: float = 0.0
+var _obstacle_cooldown: float = 0.0
+var _body_cooldown: float = 0.0
+var _flight_time: float = 0.0
+var _clock: float = 0.0
+var _spin_time: float = 0.0
+var _spin_direction: float = 1.0
+var _steering_visual: float = 0.0
+var _obstacle_world: Array[Dictionary] = []
+var _ai_lane: float = 0.0
+var _ai_offset: float = 0.0
+var _ai_boost_held: bool = false
+var _boost_empty_latched: bool = false
+var _drift_held: bool = false
+var _drift_boost_time: float = 0.0
+var _ai_attack_timer: float = 1.0
+var _ram_target: GlyphRacer
+var _ai_defend_time: float = 0.0
+var _ai_defend_side: float = 1.0
+var _route_kind: String = "road"
+var _network_lane_speed: float = 0.0
+var _network_jump_height: float = 0.0
+var _network_jump_speed: float = 0.0
+var _network_tube: Dictionary = {}
+var _network_vent: Dictionary = {}
+var _network_vent_elapsed: float = 0.0
+var _network_feature_cooldown: float = 0.0
+var _network_ai_fork: float = -1.0
+var _network_yaw: float = 0.0
+var _network_ai_route: String = "main"
+var _network_ai_entry_cursor: int = 0
+var _network_loop_rewards: Dictionary = {}
+var _network_last_pad: String = ""
+# Contact rotates the real driving frame. This is separate from the optional
+# Q/E barrel-roll cosmetic and never locks the driver's controls.
+var _contact_yaw_velocity: float = 0.0
+var _contact_recovering: bool = false
+var _contact_recovery_elapsed: float = 0.0
+var _contact_pairs: Dictionary = {}
+var _wall_touch_frame: bool = false
+var _wall_continuous: float = 0.0
+var _wall_contact_gap: float = 1.0
+var _wall_major_active: bool = false
+var _contact_step_dt: float = 1.0 / 60.0
+var _contact_stats: Dictionary = {}
+var linked_frame: RacerFrame
+var frame_reduced_motion := false
+var body_reset_serial := 0
+var _frame_contact_point := Vector3.INF
+var _assembly_steering := 1.0
+var _assembly_lateral_grip := 1.0
+var _assembly_yaw_damping := 1.0
+
+func set_linked_frame(enabled: bool, crashes := false) -> void:
+	if enabled:
+		set_car_blueprint(CarBlueprint.default_blueprint(), crashes)
+		# The fixed v13/v14 prototype keeps its existing handling. Saved cars
+		# explicitly opt into the new functional-module tradeoffs instead.
+		_set_assembly_handling({"steering": 1.0, "lateral_grip": 1.0, "yaw_damping": 1.0})
+	else:
+		_clear_car_frame()
+
+func _clear_car_frame() -> void:
+	body_reset_serial += 1
+	_set_assembly_handling({"steering": 1.0, "lateral_grip": 1.0, "yaw_damping": 1.0})
+	if is_instance_valid(linked_frame):
+		remove_child(linked_frame)
+		linked_frame.queue_free()
+		linked_frame = null
+	_visual.position = Vector3.ZERO
+	_visual.rotation = Vector3.ZERO
+	_visual.scale = Vector3.ONE
+
+func set_car_blueprint(blueprint: Dictionary, crashes := false) -> void:
+	_clear_car_frame()
+	linked_frame = RacerFrame.new()
+	linked_frame.name = "LinkedFrame"
+	add_child(linked_frame)
+	linked_frame.build(_tint, blueprint)
+	linked_frame.crash_enabled = crashes
+	_set_assembly_handling(CarBlueprint.handling(linked_frame.blueprint))
+	_visual.position = CarBlueprint.core_position()
+	_visual.scale = Vector3.ONE * 0.85
+
+func _set_assembly_handling(values: Dictionary) -> void:
+	_assembly_steering = float(values.steering)
+	_assembly_lateral_grip = float(values.lateral_grip)
+	_assembly_yaw_damping = float(values.yaw_damping)
+
+func body_radius() -> float:
+	return RacerFrame.RADIUS if is_instance_valid(linked_frame) else BODY_RADIUS
+
+func body_bound() -> float:
+	return linked_frame.bound() if is_instance_valid(linked_frame) else BODY_RADIUS
+
+func body_centers() -> PackedVector3Array:
+	if not is_instance_valid(linked_frame):
+		return PackedVector3Array([position])
+	var orientation := basis if _is_route_network() else Basis(Vector3.UP, heading)
+	var centers := PackedVector3Array()
+	for local: Vector3 in linked_frame.local_centers():
+		centers.append(position + orientation * local)
+	return centers
+
+
+func body_distance(point: Vector3) -> float:
+	var nearest := INF
+	for center: Vector3 in body_centers():
+		nearest = minf(nearest, center.distance_to(point))
+	return nearest
+
+func swept_body_fraction(start: Vector3, finish: Vector3, previous: PackedVector3Array, margin: float, height: float = 0.0) -> float:
+	var earliest := INF
+	var centers := body_centers()
+	for index: int in centers.size():
+		var before := previous[mini(index, previous.size() - 1)] if not previous.is_empty() else centers[index]
+		var a := start - before - frame_up * height
+		var b := finish - centers[index] - frame_up * height
+		var delta := b - a
+		var t := clampf(-a.dot(delta) / maxf(delta.length_squared(), 0.0001), 0.0, 1.0)
+		if a.lerp(b, t).length() <= body_radius() + margin:
+			earliest = minf(earliest, t)
+	return earliest
+
+func _linked_impact(closing: float, side: float, source: String) -> void:
+	if not is_instance_valid(linked_frame):
+		return
+	var contact := basis.inverse() * (_frame_contact_point - position) if _frame_contact_point.is_finite() else Vector3.INF
+	var result := linked_frame.impact(closing, side, source, contact)
+	if result.is_empty():
+		return
+	body_reset_serial += 1
+	_emit_event(result)
+	if result == "frame_explosion":
+		velocity *= 0.6
+		_contact_yaw_velocity *= 0.35
+
+func _frame_wall_contact() -> void:
+	# Resolve each real module against the local ribbon, including tail swing.
+	for iteration: int in 2:
+		for center: Vector3 in body_centers():
+			var road := _track.network_nearest(center, route_distance, route_id) if _is_route_network() else _track.nearest(center, route_distance)
+			var offset := float(road.offset)
+			if not bool(road.get("has_floor", true)) or bool(road.get("open_right" if offset > 0.0 else "open_left", false)):
+				continue
+			var excess := absf(offset) + body_radius() - float(road.width) * 0.5
+			if excess <= 0.0:
+				continue
+			var normal := Vector3(road.right) * signf(offset)
+			position -= normal * excess
+			_frame_contact_point = center + normal * body_radius()
+			velocity = _wall_response(velocity, normal, road)
+			_frame_contact_point = Vector3.INF
+
+func _frame_body_contact(other: GlyphRacer) -> void:
+	var up := frame_up if _is_route_network() else Vector3.UP
+	if _is_route_network() and (controls_locked or other.controls_locked or vent_active or other.vent_active or frame_up.dot(other.frame_up) < 0.7):
+		return
+	if absf((position - other.position).dot(up)) > 1.7:
+		return
+	var deepest := 0.0
+	var normal := Vector3.ZERO
+	var hit := Vector3.ZERO
+	var other_hit := Vector3.ZERO
+	for a: Vector3 in body_centers():
+		for b: Vector3 in other.body_centers():
+			var difference := a - b
+			difference -= up * difference.dot(up)
+			var penetration := body_radius() + other.body_radius() - difference.length()
+			if penetration > deepest:
+				deepest = penetration
+				normal = difference.normalized() if difference.length_squared() > 0.0001 else _contact_right()
+				hit = a - normal * body_radius()
+				other_hit = b + normal * other.body_radius()
+	if deepest <= 0.0:
+		return
+	_frame_contact_point = hit
+	other._frame_contact_point = other_hit
+	position += normal * deepest * 0.5
+	other.position -= normal * deepest * 0.5
+	if _is_route_network():
+		lateral_offset += normal.dot(frame_right) * deepest * 0.5
+		other.lateral_offset -= normal.dot(other.frame_right) * deepest * 0.5
+	_resolve_body_impulse(other, normal)
+	_frame_contact_point = Vector3.INF
+	other._frame_contact_point = Vector3.INF
+
+
+
+func configure(track_ref: RacerTrack, glyph_text: String, tint: Color, style: int = 0) -> void:
+	_track = track_ref
+	controls_locked = false
+	vent_active = false
+	route_id = "main"
+	_network_tube.clear()
+	_network_vent.clear()
+	_tint = tint
+	total_progress = 0.0
+	boost_energy = 100.0
+	last_event = ""
+	event_serial = 0
+	_event_queue.clear()
+	_ai_offset = float(glyph_text.unicode_at(0) % 7 - 3) * 0.42 if not glyph_text.is_empty() else 0.0
+	apply_cosmetics({"glyph": glyph_text, "wing": "chevrons" if style == 1 else ("halo" if style == 2 else "none"), "trail": "none", "material": "neon", "font": "mono"})
+	_obstacle_world.clear()
+	for obstacle: Dictionary in _track.obstacles:
+		var location: Dictionary = _track.sample(float(obstacle.get("distance", 0.0)))
+		var obstacle_position: Vector3 = location["position"]
+		var right: Vector3 = location["right"]
+		obstacle_position += right * float(obstacle.get("lane", 0.0))
+		_obstacle_world.append({
+			"position": obstacle_position,
+			"distance": float(obstacle.get("distance", 0.0)),
+			"lane": float(obstacle.get("lane", 0.0)),
+			"radius": float(obstacle.get("radius", 1.2)),
+			"kind": str(obstacle.get("kind", "obstacle")),
+		})
+	_configured = true
+	reset_contact_telemetry()
+	reset_at(0.0)
+
+
+func apply_cosmetics(setup: Dictionary) -> void:
+	if is_instance_valid(_visual):
+		remove_child(_visual)
+		_visual.queue_free()
+	_visual = RacerCosmetics.build(setup, _tint)
+	_visual.name = "GlyphBody"
+	add_child(_visual)
+
+
+func reset_at(distance: float, lane: float = 0.0) -> void:
+	body_reset_serial += 1
+	if is_instance_valid(linked_frame):
+		linked_frame.reset_motion()
+	if not is_instance_valid(_track) or _track.length <= 0.0:
+		return
+	if _is_route_network():
+		_reset_network(distance, lane)
+		return
+	var sample_data: Dictionary = _track.sample(distance)
+	var road_position: Vector3 = sample_data["position"]
+	var right: Vector3 = sample_data["right"]
+	var forward: Vector3 = sample_data["forward"]
+	var half_width: float = float(sample_data.get("width", _track.road_width)) * 0.5 - BODY_RADIUS
+	position = road_position + right * clampf(lane, -half_width, half_width) + Vector3.UP * HOVER_HEIGHT
+	heading = atan2(-forward.x, -forward.z)
+	rotation.y = heading
+	if _track._course == 7:
+		_align_experiment_frame(sample_data)
+	velocity = Vector3.ZERO
+	speed = 0.0
+	route_distance = fposmod(distance, _track.length)
+	_previous_distance = route_distance
+	lateral_offset = lane
+	airborne = false
+	boosting = false
+	drift_amount = 0.0
+	drifting = false
+	bracing = false
+	drift_charge = 0.0
+	drift_stage = 0
+	last_drift_stage = 0
+	_drift_held = false
+	_drift_boost_time = 0.0
+	ram_windup = 0.0
+	_ram_target = null
+	_pad_boost_time = 0.0
+	_flight_time = 0.0
+	_spin_time = 0.0
+	_reset_contact_motion()
+	_jump_pad_cooldown = 1.0
+	_boost_pad_cooldown = 0.3
+	_ai_lane = lane
+	_ai_boost_held = false
+	_boost_empty_latched = false
+	if is_instance_valid(_visual):
+		_visual.rotation = Vector3.ZERO
+		_visual.position.x = 0.0
+		_visual.reset_trail()
+
+
+func set_total_progress(value: float) -> void:
+	total_progress = value
+
+
+func step_drive(delta: float, throttle: float, steer: float, brake: bool, boost: bool) -> void:
+	if not _configured or delta <= 0.0:
+		return
+	if _is_route_network():
+		_step_network(delta, throttle, steer, brake, boost)
+		return
+	if is_instance_valid(linked_frame):
+		var was_detached := linked_frame.detached > 0.0
+		linked_frame.step(minf(delta, 0.05), steer, speed, frame_reduced_motion, throttle, brake and not airborne and speed > 12.0 and absf(steer) > 0.08)
+		for event: String in linked_frame.drain_events():
+			_emit_event(event)
+		if was_detached and linked_frame.detached <= 0.0:
+			body_reset_serial += 1
+		boost = boost and linked_frame.detached <= 0.0
+		steer = linked_frame.impaired_steer(steer, brake or throttle < 0.0, speed)
+	var dt: float = minf(delta, 0.05)
+	throttle = clampf(throttle, -1.0, 1.0)
+	steer = clampf(steer, -1.0, 1.0)
+	_clock += dt
+	_tick_contact_guards(dt)
+	_pad_boost_time = maxf(0.0, _pad_boost_time - dt)
+	_drift_boost_time = maxf(0.0, _drift_boost_time - dt)
+	_boost_pad_cooldown = maxf(0.0, _boost_pad_cooldown - dt)
+	_jump_pad_cooldown = maxf(0.0, _jump_pad_cooldown - dt)
+	_wall_cooldown = maxf(0.0, _wall_cooldown - dt)
+	_obstacle_cooldown = maxf(0.0, _obstacle_cooldown - dt)
+	_body_cooldown = maxf(0.0, _body_cooldown - dt)
+	if not boost:
+		_boost_empty_latched = false
+	elif boost_energy <= 0.2:
+		_boost_empty_latched = true
+	var manual_boost: bool = boost and not _boost_empty_latched and boost_energy > 0.2 and throttle > 0.0
+	var was_boosting: bool = boosting
+	boosting = manual_boost or _pad_boost_time > 0.0 or _drift_boost_time > 0.0
+	if boosting and not was_boosting and manual_boost:
+		_emit_event("boost")
+	if manual_boost and _pad_boost_time <= 0.0:
+		boost_energy = maxf(0.0, boost_energy - dt * 25.0)
+	elif not manual_boost:
+		boost_energy = minf(100.0, boost_energy + dt * (12.0 if brake else 9.0))
+
+	var horizontal_velocity: Vector3 = Vector3(velocity.x, 0.0, velocity.z)
+	var horizontal_speed: float = horizontal_velocity.length()
+	# Holding Space braces on straight sections too. Steering and speed are
+	# still required for the separate powerslide charge mechanic.
+	bracing = brake and not airborne
+	# Sliding needs speed, steering and ground contact. Holding Space while
+	# parked or driving straight cannot bank a free boost.
+	drifting = brake and not airborne and horizontal_speed > 12.0 and absf(steer) > 0.08
+	if drifting:
+		if not _drift_held:
+			_emit_event("drift_start")
+		drift_charge = minf(3.0, drift_charge + dt * clampf(absf(steer) * 1.4, 0.75, 1.0))
+	elif brake:
+		drift_charge = maxf(0.0, drift_charge - dt * 0.75)
+	var next_stage: int = 0
+	for threshold: float in DRIFT_THRESHOLDS:
+		if drift_charge >= threshold:
+			next_stage += 1
+	if next_stage > drift_stage:
+		_emit_event("drift_charge")
+	drift_stage = next_stage
+	if _drift_held and not brake:
+		last_drift_stage = drift_stage
+		if drift_stage > 0 and not airborne and horizontal_speed > 12.0:
+			_drift_boost_time = 0.22 + drift_stage * 0.24
+			horizontal_velocity += Vector3(-sin(heading), 0.0, -cos(heading)) * (4.0 + drift_stage * 4.0)
+			boost_energy = minf(100.0, boost_energy + drift_stage * 4.0)
+			boosting = true
+			_emit_event("drift_release")
+		drift_charge = 0.0
+		drift_stage = 0
+	_drift_held = brake
+	var turn_rate: float = lerpf(1.85, 1.38, clampf(horizontal_speed / BOOST_TOP_SPEED, 0.0, 1.0))
+	if brake:
+		turn_rate *= 1.38
+	if airborne:
+		turn_rate *= 0.58
+	turn_rate *= _assembly_steering
+	# Positive steering turns toward the racer's local right (-yaw in Godot).
+	heading = wrapf(heading - steer * turn_rate * dt - _step_contact_yaw(dt, steer, brake or throttle < 0.0), -PI, PI)
+	rotation.y = heading
+	var facing: Vector3 = Vector3(-sin(heading), 0.0, -cos(heading))
+	var racer_right: Vector3 = Vector3(cos(heading), 0.0, -sin(heading))
+	var lateral_speed: float = horizontal_velocity.dot(racer_right)
+	drift_amount = lerpf(drift_amount, absf(lateral_speed) / 40.0 if brake else 0.0, 1.0 - exp(-dt * 6.0))
+	# Space keeps lower side grip than ordinary driving, but enough traction
+	# to turn carried momentum rather than pushing almost sideways at the exit.
+	var grip: float = 4.5 if brake else 8.5
+	if airborne:
+		grip = 0.7
+	grip *= _assembly_lateral_grip
+	# Remove lateral velocity gradually. This gives collisions and drifting inertia.
+	horizontal_velocity -= racer_right * lateral_speed * (1.0 - exp(-grip * dt))
+	var acceleration: float = (50.0 if boosting else 32.0) + (last_drift_stage * 12.0 if _drift_boost_time > 0.0 else 0.0)
+	if airborne:
+		acceleration *= 0.42
+	horizontal_velocity += facing * throttle * acceleration * dt
+	var drag: float = 0.17 if throttle <= 0.0 else 0.065
+	if brake:
+		drag += 0.10
+	horizontal_velocity *= exp(-drag * dt)
+	var max_speed: float = (BOOST_TOP_SPEED if boosting else NORMAL_TOP_SPEED) + (6.0 + last_drift_stage * 6.0 if _drift_boost_time > 0.0 else 0.0)
+	# Retain existing overspeed while coasting down, but acceleration cannot
+	# create new overspeed. Applying the decay after acceleration would let a
+	# stronger engine add excess speed forever.
+	var speed_ceiling: float = maxf(max_speed, move_toward(horizontal_speed, max_speed, dt * 22.0))
+	var actual_speed: float = horizontal_velocity.length()
+	if actual_speed > speed_ceiling:
+		horizontal_velocity *= speed_ceiling / actual_speed
+	# Reverse is useful for escaping a wall; it is deliberately much slower.
+	var forward_speed: float = horizontal_velocity.dot(facing)
+	if forward_speed < -18.0:
+		horizontal_velocity += facing * (-18.0 - forward_speed)
+	velocity.x = horizontal_velocity.x
+	velocity.z = horizontal_velocity.z
+	# Only the experimental course opts into natural crest release. Existing
+	# courses keep their established adhesion and jump-pad behavior.
+	if _track._course == 7 and not airborne and horizontal_velocity.length() > 18.0:
+		var before: Dictionary = _track.sample(route_distance - 4.0)
+		var after: Dictionary = _track.sample(route_distance + 4.0)
+		var slope_before: float = Vector3(before.forward).y / maxf(Vector2(before.forward.x, before.forward.z).length(), 0.01)
+		var slope_after: float = Vector3(after.forward).y / maxf(Vector2(after.forward.x, after.forward.z).length(), 0.01)
+		var forward_speed_on_road: float = horizontal_velocity.dot(Vector3(after.forward.x, 0, after.forward.z).normalized())
+		if slope_before > 0.01 and forward_speed_on_road > 18.0 and (slope_after - slope_before) / 8.0 * forward_speed_on_road * forward_speed_on_road < -GRAVITY:
+			hop(slope_before * forward_speed_on_road)
+	if airborne:
+		velocity.y -= GRAVITY * dt
+		_flight_time += dt
+	else:
+		velocity.y = 0.0
+	position += velocity * dt
+
+	var road: Dictionary = _track.nearest(position, route_distance)
+	frame_up = Vector3.UP
+	frame_right = Vector3(road.right)
+	frame_forward = Vector3(road.forward)
+	_resolve_walls(road)
+	_resolve_obstacles()
+	# The wall/contact correction can change the nearest point slightly.
+	road = _track.nearest(position, float(road["distance"]))
+	var road_position: Vector3 = road["position"]
+	var floor_height: float = road_position.y + HOVER_HEIGHT
+	if airborne:
+		if position.y <= floor_height and _flight_time > 0.12:
+			position.y = floor_height
+			velocity.y = 0.0
+			airborne = false
+			_emit_event("landed")
+	else:
+		position.y = floor_height
+	route_distance = float(road["distance"])
+	lateral_offset = float(road.get("offset", 0.0))
+	var progress_delta: float = wrapf(route_distance - _previous_distance, -_track.length * 0.5, _track.length * 0.5)
+	total_progress += progress_delta
+	_previous_distance = route_distance
+	_handle_pads()
+	speed = Vector3(velocity.x, 0.0, velocity.z).length()
+	_update_visuals(dt, steer, lateral_speed)
+	if _track._course == 7:
+		_align_experiment_frame(road)
+	if not position.is_finite() or not velocity.is_finite():
+		reset_at(route_distance)
+		_emit_event("recover")
+
+
+func _align_experiment_frame(road: Dictionary) -> void:
+	frame_forward = Vector3(road.forward)
+	frame_up = Vector3(road.up)
+	frame_right = Vector3(road.right)
+	var facing := Vector3(-sin(heading), 0.0, -cos(heading))
+	facing = (facing - frame_up * facing.dot(frame_up)).normalized()
+	basis = Basis(facing.cross(frame_up).normalized(), frame_up, -facing).orthonormalized()
+
+
+func _resolve_walls(road: Dictionary) -> void:
+	if is_instance_valid(linked_frame):
+		_frame_wall_contact()
+		return
+	var half_width: float = maxf(1.0, float(road.get("width", _track.road_width)) * 0.5 - BODY_RADIUS)
+	var offset: float = float(road.get("offset", 0.0))
+	if absf(offset) <= half_width:
+		return
+	var right: Vector3 = road["right"]
+	right.y = 0.0
+	right = right.normalized()
+	var wall_normal: Vector3 = right * signf(offset)
+	position -= wall_normal * (absf(offset) - half_width)
+	velocity = _wall_response(velocity, wall_normal, road)
+
+
+
+func _resolve_obstacles() -> void:
+	for obstacle: Dictionary in _obstacle_world:
+		var distance_gap: float = absf(wrapf(float(obstacle["distance"]) - route_distance, -_track.length * 0.5, _track.length * 0.5))
+		if distance_gap > 18.0:
+			continue
+		var obstacle_position: Vector3 = obstacle["position"]
+		if position.y > obstacle_position.y + 3.3:
+			continue
+		var closest_center := position
+		for center: Vector3 in body_centers():
+			if center.distance_squared_to(obstacle_position) < closest_center.distance_squared_to(obstacle_position):
+				closest_center = center
+		var difference: Vector3 = closest_center - obstacle_position
+		difference.y = 0.0
+		var collision_radius: float = body_radius() + float(obstacle["radius"])
+		var separation: float = difference.length()
+		if separation >= collision_radius:
+			continue
+		var normal: Vector3 = difference / separation if separation > 0.001 else Vector3(cos(heading), 0.0, -sin(heading))
+		position += normal * (collision_radius - separation + 0.03)
+		var incoming_speed: float = velocity.dot(normal)
+		if incoming_speed < 0.0:
+			var before_contact: Vector3 = velocity
+			velocity -= normal * incoming_speed * 1.58
+			velocity.x *= 0.88
+			velocity.z *= 0.88
+			if _obstacle_cooldown <= 0.0:
+				_frame_contact_point = closest_center - normal * body_radius() if is_instance_valid(linked_frame) else Vector3.INF
+				_apply_contact_rotation(normal, before_contact, -incoming_speed, "obstacle")
+				_frame_contact_point = Vector3.INF
+				drift_charge = 0.0
+				drift_stage = 0
+				_emit_event("bounce")
+				_obstacle_cooldown = 0.55
+
+
+func _handle_pads() -> void:
+	if airborne:
+		return
+	if _boost_pad_cooldown <= 0.0:
+		for pad: Dictionary in _track.boosts:
+			if _inside_pad(pad):
+				_pad_boost_time = 1.65
+				_boost_pad_cooldown = 2.2
+				boost_energy = minf(100.0, boost_energy + 22.0)
+				var forward: Vector3 = Vector3(-sin(heading), 0.0, -cos(heading))
+				velocity += forward * maxf(0.0, 82.0 - Vector3(velocity.x, 0.0, velocity.z).length())
+				boosting = true
+				_emit_event("pad")
+				break
+	if _jump_pad_cooldown <= 0.0:
+		for ramp: Dictionary in _track.jumps:
+			if _inside_pad(ramp) and speed > 12.0:
+				hop(11.0 + minf(speed, BOOST_TOP_SPEED) * 0.085)
+				_jump_pad_cooldown = 2.0
+				break
+
+
+func _inside_pad(pad: Dictionary) -> bool:
+	if is_instance_valid(linked_frame):
+		var road := _track.network_sample(float(pad.get("distance", 0.0)), str(pad.get("route_id", "main"))) if _is_route_network() else _track.sample(float(pad.get("distance", 0.0)))
+		for center: Vector3 in body_centers():
+			var relative := center - Vector3(road.position)
+			if absf(relative.dot(Vector3(road.up)) - HOVER_HEIGHT) < 1.3 and absf(relative.dot(Vector3(road.forward))) <= float(pad.get("length", 7.0)) * 0.5 + body_radius() and absf(relative.dot(Vector3(road.right)) - float(pad.get("lane", 0.0))) <= float(pad.get("width", 4.0)) * 0.5 + body_radius():
+				return true
+		return false
+	if _is_route_network():
+		var road: Dictionary = _track.network_sample(float(pad.get("distance", 0.0)), str(pad.get("route_id", "main")))
+		var relative: Vector3 = position - Vector3(road["position"])
+		return (
+			bool(road.get("has_floor", true))
+			and frame_up.dot(Vector3(road["up"])) > 0.9
+			and absf(relative.dot(Vector3(road["up"])) - HOVER_HEIGHT) < 1.3
+			and absf(relative.dot(Vector3(road["forward"]))) <= float(pad.get("physical_length", pad.get("length", 7.0))) * 0.5
+			and absf(relative.dot(Vector3(road["right"])) - float(pad.get("lane", 0.0))) <= float(pad.get("width", 4.0)) * 0.5 + 0.4
+		)
+	var gap: float = absf(wrapf(route_distance - float(pad.get("distance", 0.0)), -_track.length * 0.5, _track.length * 0.5))
+	return gap <= float(pad.get("length", 7.0)) * 0.5 and absf(lateral_offset - float(pad.get("lane", 0.0))) <= float(pad.get("width", 4.0)) * 0.5 + 0.4
+
+
+func hop(strength: float = 13.5) -> void:
+	if airborne or not _configured:
+		return
+	if _is_route_network():
+		if not _network_combat_allowed():
+			return
+		airborne = true
+		_network_jump_height = 0.05
+		_network_jump_speed = strength
+		_emit_event("jump")
+		return
+	airborne = true
+	_flight_time = 0.0
+	velocity.y = strength
+	position.y += 0.05
+	_emit_event("jump")
+
+
+func do_spin(direction: int = 1) -> void:
+	if not _configured or _spin_time > 0.0:
+		return
+	_spin_time = 0.7
+	_spin_direction = -1.0 if direction < 0 else 1.0
+	_emit_event("spin")
+
+
+func step_ai(delta: float, skill: float = 0.9) -> void:
+	if not _configured:
+		return
+	if _is_route_network():
+		_step_network_ai(delta, skill)
+		return
+	skill = clampf(skill, 0.4, 1.1)
+	var look_ahead: float = 11.0 + speed * 0.36 + (body_bound() - BODY_RADIUS)
+	var target: Dictionary = _track.sample(route_distance + look_ahead)
+	var further: Dictionary = _track.sample(route_distance + look_ahead + 25.0)
+	var target_forward: Vector3 = target["forward"]
+	var further_forward: Vector3 = further["forward"]
+	var curve: float = clampf(target_forward.dot(further_forward), -1.0, 1.0)
+	var wanted_lane: float = _ai_offset + sin(_clock * 0.24 + _ai_offset) * 0.35
+	if _ai_defend_time > 0.0:
+		wanted_lane += _ai_defend_side * 2.4
+	var obstacle_ahead: bool = false
+	for obstacle: Dictionary in _obstacle_world:
+		var gap: float = fposmod(float(obstacle["distance"]) - route_distance, _track.length)
+		if gap < 32.0 + body_bound() - BODY_RADIUS and absf(float(obstacle["lane"]) - wanted_lane) < float(obstacle["radius"]) + body_radius() + 1.05:
+			obstacle_ahead = true
+			wanted_lane = float(obstacle["lane"]) + (float(obstacle["radius"]) + body_radius() + 1.65) * (-1.0 if float(obstacle["lane"]) >= 0.0 else 1.0)
+			break
+	var lane_limit: float = _track.road_width * 0.5 - maxf(2.2, body_bound())
+	wanted_lane = clampf(wanted_lane, -lane_limit, lane_limit)
+	_ai_lane = move_toward(_ai_lane, wanted_lane, delta * 7.0)
+	var target_position: Vector3 = target["position"]
+	var target_right: Vector3 = target["right"]
+	target_position += target_right * _ai_lane
+	var direction: Vector3 = target_position - position
+	direction.y = 0.0
+	var desired_heading: float = atan2(-direction.x, -direction.z)
+	var turn_error: float = wrapf(desired_heading - heading, -PI, PI)
+	var steer: float = clampf(-turn_error * 2.35, -1.0, 1.0)
+	var target_speed: float = lerpf(36.0, 64.0 * skill, clampf((curve - 0.7) / 0.3, 0.0, 1.0))
+	if absf(turn_error) > 0.75:
+		target_speed *= 0.65
+	var throttle: float = clampf((target_speed - speed) * 0.12 + 0.17, -0.5, 1.0)
+	var straight_ahead: bool = curve > 0.98 and absf(turn_error) < 0.16 and not obstacle_ahead and skill >= 0.8
+	if not straight_ahead or boost_energy < 12.0:
+		_ai_boost_held = false
+	elif boost_energy > 70.0 and curve > 0.986 and absf(turn_error) < 0.12:
+		_ai_boost_held = true
+	if _ai_boost_held:
+		throttle = 1.0
+	step_drive(delta, throttle, steer, _ai_defend_time > 0.0, _ai_boost_held)
+
+
+func try_ram(others: Array) -> bool:
+	# Start with a visible warning; impact is rechecked after the windup,
+	# allowing the target to sidestep, pull away, jump or brace in a slide.
+	if not _configured or ram_cooldown > 0.0 or ram_windup > 0.0 or speed < 12.0 or airborne:
+		return false
+	if _is_route_network() and not _network_combat_allowed():
+		return false
+	var target: GlyphRacer = _find_ram_target(others, RAM_RANGE)
+	if target == null:
+		return false
+	_ram_target = target
+	ram_windup = RAM_WINDUP_TIME
+	ram_cooldown = RAM_COOLDOWN
+	velocity.x *= 0.96
+	velocity.z *= 0.96
+	_emit_event("ram_windup")
+	return true
+
+
+func step_competition(delta: float, others: Array, is_ai: bool = false) -> void:
+	if not _configured or delta <= 0.0:
+		return
+	var dt: float = minf(delta, 0.05)
+	ram_cooldown = maxf(0.0, ram_cooldown - dt)
+	_ai_defend_time = maxf(0.0, _ai_defend_time - dt)
+	if ram_windup > 0.0:
+		ram_windup = maxf(0.0, ram_windup - dt)
+		if ram_windup <= 0.0:
+			_finish_ram()
+	if not is_ai:
+		return
+	# Opponents react to the same visible warning. They choose a lane away
+	# from the attacker and brace, rather than reading future player input.
+	for candidate: Variant in others:
+		if candidate is GlyphRacer and candidate != self:
+			var attacker: GlyphRacer = candidate as GlyphRacer
+			if attacker.ram_windup > 0.0 and attacker._ram_target == self:
+				_ai_defend_time = 0.5
+				var road_right := Vector3(cos(heading), 0.0, -sin(heading))
+				_ai_defend_side = signf((position - attacker.position).dot(road_right))
+				if is_zero_approx(_ai_defend_side):
+					_ai_defend_side = -1.0 if _ai_offset < 0.0 else 1.0
+				break
+	_ai_attack_timer -= dt
+	if _ai_attack_timer <= 0.0:
+		_ai_attack_timer = 0.85 + absf(_ai_offset) * 0.25
+		# Deliberate opportunities on level ground; never attack blindly.
+		if ram_cooldown <= 0.0 and _ai_defend_time <= 0.0 and sin(_clock * 0.7 + _ai_offset) > 0.15:
+			if try_ram(others):
+				ram_cooldown = 6.5
+
+
+func _find_ram_target(others: Array, reach: float) -> GlyphRacer:
+	var closest: GlyphRacer = null
+	var closest_squared: float = reach * reach
+	var facing := Vector3(-sin(heading), 0.0, -cos(heading))
+	for candidate: Variant in others:
+		if not (candidate is GlyphRacer) or candidate == self:
+			continue
+		var opponent: GlyphRacer = candidate as GlyphRacer
+		if _is_route_network() and (opponent.route_id != route_id or not opponent._network_combat_allowed()):
+			continue
+		if not opponent._configured or opponent.airborne or absf(position.y - opponent.position.y) > 1.55:
+			continue
+		var offset: Vector3 = opponent.position - position
+		offset.y = 0.0
+		var distance_squared: float = offset.length_squared()
+		if distance_squared < closest_squared and distance_squared > 0.0025 and offset.dot(facing) > 0.5 * sqrt(distance_squared):
+			closest = opponent
+			closest_squared = distance_squared
+	return closest
+
+
+func _finish_ram() -> void:
+	if not is_instance_valid(_ram_target):
+		_emit_event("ram_miss")
+		return
+	var target: GlyphRacer = _ram_target
+	_ram_target = null
+	if _is_route_network() and (target.route_id != route_id or not _network_combat_allowed() or not target._network_combat_allowed()):
+		_emit_event("ram_miss")
+		return
+	var offset: Vector3 = target.position - position
+	var facing := Vector3(-sin(heading), 0.0, -cos(heading))
+	var vertical_gap: float = absf(offset.y)
+	offset.y = 0.0
+	if airborne or target.airborne or vertical_gap > 1.55 or offset.length() > RAM_HIT_RANGE or offset.normalized().dot(facing) < 0.5:
+		_emit_event("ram_miss")
+		return
+	var right := Vector3(cos(heading), 0.0, -sin(heading))
+	var side: float = signf(offset.dot(right))
+	if is_zero_approx(side):
+		side = -1.0 if _ai_offset < 0.0 else 1.0
+	var braced: bool = target.bracing or target.drifting or target._ai_defend_time > 0.0
+	var shove: Vector3 = (facing * 8.0 + right * side * 17.0) * (0.35 if braced else 1.0)
+	target.velocity += shove
+	velocity -= facing * (7.0 if braced else 4.0)
+	if not braced:
+		target.drift_charge = 0.0
+		target.drift_stage = 0
+	_emit_event("ram_block" if braced else "ram")
+	target._emit_event("ram_block" if braced else "ram_hit")
+	target._body_cooldown = 0.4
+	_body_cooldown = 0.4
+
+
+func collide_with(other: GlyphRacer) -> void:
+	if not is_instance_valid(other) or not _configured or not other._configured:
+		return
+	if is_instance_valid(linked_frame) or is_instance_valid(other.linked_frame):
+		_frame_body_contact(other)
+		return
+	if _is_route_network():
+		_network_collide(other)
+		return
+	if absf(position.y - other.position.y) > 1.7:
+		return
+	var offset: Vector3 = position - other.position
+	offset.y = 0.0
+	var separation: float = offset.length()
+	var min_distance: float = BODY_RADIUS * 2.1
+	if separation >= min_distance:
+		return
+	var normal: Vector3 = offset / separation if separation > 0.001 else Vector3.RIGHT
+	var correction: Vector3 = normal * (min_distance - separation) * 0.5
+	position += correction
+	other.position -= correction
+	_resolve_body_impulse(other, normal)
+
+
+
+func _update_visuals(dt: float, steer: float, lateral_speed: float) -> void:
+	_steering_visual = lerpf(_steering_visual, steer, 1.0 - exp(-dt * 9.0))
+	var roll: float = _steering_visual * 0.3 - clampf(lateral_speed * 0.012, -0.24, 0.24)
+	if _spin_time > 0.0:
+		_spin_time = maxf(0.0, _spin_time - dt)
+		roll += (1.0 - _spin_time / 0.7) * TAU * _spin_direction
+	_visual.rotation.z = roll
+	_visual.position.y = sin(_clock * 8.0) * 0.06 + (0.07 if boosting else 0.0)
+	if is_instance_valid(linked_frame):
+		var breakup := sin(clampf(linked_frame.burst / RacerFrame.BURST_SECONDS, 0.0, 1.0) * PI)
+		_visual.position.x = -breakup * 1.6
+		_visual.position.y += breakup * 0.9
+		_visual.rotation.y = breakup * 1.2
+		_visual.rotation.z += linked_frame.recovery_roll()
+	_visual.rotation.x = clampf(-velocity.y * 0.018, -0.25, 0.28) if airborne else 0.0
+	_visual.step_visuals(dt, global_position, heading, speed, boosting, drift_stage, ram_windup)
+
+
+func _emit_event(event: String) -> void:
+	last_event = event
+	event_serial += 1
+	_event_queue.append(event)
+	if _event_queue.size() > 16:
+		_event_queue.pop_front()
+
+func drain_events() -> Array[String]:
+	var events: Array[String] = _event_queue.duplicate()
+	_event_queue.clear()
+	return events
+
+
+func _is_route_network() -> bool:
+	return is_instance_valid(_track) and _track.is_route_network()
+
+
+func set_route_seed(value: int) -> void:
+	route_seed = value
+
+
+func route_hud() -> Dictionary:
+	if not _is_route_network():
+		return {}
+	var road: Dictionary = _track.network_sample(route_distance, route_id)
+	var fork: Dictionary = _track.fork_at(route_distance, 180.0)
+	var choices: Array[Dictionary] = []
+	for choice: Dictionary in fork.get("choices", []):
+		choices.append({"id": str(choice.get("route_id", "main")), "name": str(choice.get("name", "MAIN")), "kind": str(choice.get("kind", "road")), "lane": int(choice.get("lane", 0))})
+	var selected: int = -1 if lateral_offset < -4.0 else (1 if lateral_offset > 4.0 else 0)
+	return {"id": route_id, "name": str(road.get("name", route_id.to_upper().replace("_", " "))), "kind": _route_kind, "choices": choices, "fork_distance": float(fork.get("gap", -1.0)), "selected_lane": selected, "manual_entry": true, "controls_locked": controls_locked, "vent_active": vent_active, "inverted": frame_up.y < -0.15}
+
+
+func _reset_network(distance: float, lane: float) -> void:
+	body_reset_serial += 1
+	if is_instance_valid(linked_frame):
+		linked_frame.reset_motion()
+		_visual.position.x = 0.0
+	# A missed jump can recover at its physically projected race distance.
+	# The controller synchronizes scoring, so recovery cannot award gates.
+	if vent_active:
+		route_id = "main"
+	controls_locked = false
+	var road: Dictionary = _track.network_sample(distance, route_id)
+	route_id = str(road.get("route_id", road.get("route_choice", "main")))
+	route_distance = fposmod(distance, _track.length)
+	_previous_distance = route_distance
+	lateral_offset = clampf(lane, -float(road.get("width", 24.0)) * 0.5 + body_bound(), float(road.get("width", 24.0)) * 0.5 - body_bound())
+	velocity = Vector3.ZERO
+	speed = 0.0
+	_network_lane_speed = 0.0
+	_network_yaw = 0.0
+	_network_ai_route = "main"
+	_network_loop_rewards.clear()
+	_network_last_pad = ""
+	_network_jump_height = 0.0
+	_network_jump_speed = 0.0
+	_network_vent_elapsed = 0.0
+	_network_vent.clear()
+	_network_tube.clear()
+	vent_active = false
+	airborne = false
+	boosting = false
+	bracing = false
+	drifting = false
+	drift_charge = 0.0
+	drift_stage = 0
+	last_drift_stage = 0
+	_drift_held = false
+	_drift_boost_time = 0.0
+	ram_windup = 0.0
+	_ram_target = null
+	_pad_boost_time = 0.0
+	_flight_time = 0.0
+	_spin_time = 0.0
+	_reset_contact_motion()
+	_jump_pad_cooldown = 1.0
+	_boost_pad_cooldown = 0.3
+	_network_feature_cooldown = 1.0
+	_network_ai_fork = -1.0
+	_ai_lane = lateral_offset
+	_ai_boost_held = false
+	_boost_empty_latched = false
+	_network_apply_frame(road)
+	position = (road["position"] as Vector3) + frame_right * lateral_offset + frame_up * HOVER_HEIGHT
+	if is_instance_valid(_visual):
+		_visual.rotation = Vector3.ZERO
+		_visual.reset_trail()
+
+
+func _network_apply_frame(road: Dictionary) -> void:
+	frame_forward = (road.get("forward", Vector3.FORWARD) as Vector3).normalized()
+	frame_up = (road.get("up", Vector3.UP) as Vector3).normalized()
+	frame_right = (road.get("right", frame_forward.cross(frame_up)) as Vector3).normalized()
+	frame_up = frame_right.cross(frame_forward).normalized()
+	var facing: Vector3 = (frame_forward * cos(_network_yaw) + frame_right * sin(_network_yaw)).normalized()
+	var facing_right: Vector3 = facing.cross(frame_up).normalized()
+	basis = Basis(facing_right, frame_up, -facing).orthonormalized()
+	_route_kind = str(road.get("section_kind", road.get("kind", "road")))
+	route_local_distance = float(road.get("local_distance", route_distance))
+	var flat_forward := Vector3(facing.x, 0.0, facing.z)
+	if flat_forward.length_squared() > 0.04:
+		heading = atan2(-flat_forward.x, -flat_forward.z)
+	# Use the real heading on upright roads, including the drivable tube.
+	# An unrolled route yaw keeps inverted loops and vent flight readable.
+	if _route_kind in ["loop", "vent_air"]:
+		var camera_road: Dictionary = _track.network_sample(route_distance, "main")
+		var camera_forward: Vector3 = camera_road.get("forward", Vector3.FORWARD)
+		if Vector2(camera_forward.x, camera_forward.z).length_squared() > 0.04:
+			camera_heading = atan2(-camera_forward.x, -camera_forward.z)
+	else:
+		camera_heading = heading
+
+
+func _network_tick(dt: float) -> void:
+	_clock += dt
+	_tick_contact_guards(dt)
+	_pad_boost_time = maxf(0.0, _pad_boost_time - dt)
+	_drift_boost_time = maxf(0.0, _drift_boost_time - dt)
+	_boost_pad_cooldown = maxf(0.0, _boost_pad_cooldown - dt)
+	_jump_pad_cooldown = maxf(0.0, _jump_pad_cooldown - dt)
+	_wall_cooldown = maxf(0.0, _wall_cooldown - dt)
+	_obstacle_cooldown = maxf(0.0, _obstacle_cooldown - dt)
+	_body_cooldown = maxf(0.0, _body_cooldown - dt)
+	_network_feature_cooldown = maxf(0.0, _network_feature_cooldown - dt)
+
+
+func _step_network(delta: float, throttle: float, steer: float, brake: bool, boost: bool) -> void:
+	var dt: float = minf(delta, 0.05)
+	if is_instance_valid(linked_frame):
+		var was_detached := linked_frame.detached > 0.0
+		linked_frame.step(dt, steer, speed, frame_reduced_motion, throttle, brake and not airborne and speed > 12.0 and absf(steer) > 0.08)
+		for event: String in linked_frame.drain_events():
+			_emit_event(event)
+		if was_detached and linked_frame.detached <= 0.0:
+			body_reset_serial += 1
+		boost = boost and linked_frame.detached <= 0.0
+		steer = linked_frame.impaired_steer(steer, brake or throttle < 0.0, speed)
+	throttle = clampf(throttle, -1.0, 1.0)
+	steer = clampf(steer, -1.0, 1.0)
+	_network_tick(dt)
+	if vent_active:
+		if bool(_network_vent.get("freight_jump", false)):
+			_step_freight_flight(dt, throttle, steer, brake, boost)
+			return
+		if bool(_network_vent.get("dog_drop", false)):
+			_step_dog_drop(dt, throttle, steer, brake, boost)
+			return
+		_step_network_vent(dt, throttle, steer, brake, boost)
+		return
+	var road: Dictionary = _track.network_nearest(position, route_distance, route_id)
+	if _track._course in [4, 6, 10]:
+		route_id = str(road["route_id"])
+	_network_apply_frame(road)
+	var before_position: Vector3 = position
+	var previous: float = route_distance
+	var previous_route: String = route_id
+	var plane_velocity: Vector3 = velocity - frame_up * velocity.dot(frame_up)
+	var old_speed: float = plane_velocity.length()
+	if not boost:
+		_boost_empty_latched = false
+	elif boost_energy <= 0.2:
+		_boost_empty_latched = true
+	var manual_boost: bool = boost and not _boost_empty_latched and boost_energy > 0.2 and throttle > 0.0
+	var was_boosting: bool = boosting
+	boosting = manual_boost or _pad_boost_time > 0.0 or _drift_boost_time > 0.0
+	if boosting and not was_boosting and manual_boost:
+		_emit_event("boost")
+	if manual_boost and _pad_boost_time <= 0.0:
+		boost_energy = maxf(0.0, boost_energy - dt * 25.0)
+	elif not manual_boost:
+		boost_energy = minf(100.0, boost_energy + dt * (12.0 if brake else 9.0))
+	bracing = brake and not airborne and _network_combat_allowed()
+	drifting = brake and not airborne and old_speed > 12.0 and absf(steer) > 0.08
+	if drifting:
+		if not _drift_held:
+			_emit_event("drift_start")
+		drift_charge = minf(3.0, drift_charge + dt * clampf(absf(steer) * 1.4, 0.75, 1.0))
+	elif brake:
+		drift_charge = maxf(0.0, drift_charge - dt * 0.75)
+	var next_stage: int = 0
+	for threshold: float in DRIFT_THRESHOLDS:
+		if drift_charge >= threshold:
+			next_stage += 1
+	if next_stage > drift_stage:
+		_emit_event("drift_charge")
+	drift_stage = next_stage
+	if _drift_held and not brake:
+		last_drift_stage = drift_stage
+		if drift_stage > 0 and not airborne and old_speed > 12.0:
+			_drift_boost_time = 0.22 + drift_stage * 0.24
+			plane_velocity += -basis.z * (4.0 + drift_stage * 4.0)
+			boost_energy = minf(100.0, boost_energy + drift_stage * 4.0)
+			boosting = true
+			_emit_event("drift_release")
+		drift_charge = 0.0
+		drift_stage = 0
+	_drift_held = brake
+	var turn_rate: float = lerpf(1.85, 1.38, clampf(old_speed / BOOST_TOP_SPEED, 0.0, 1.0))
+	if brake:
+		turn_rate *= 1.38
+	if airborne:
+		turn_rate *= 0.58
+	turn_rate *= _assembly_steering
+	_network_yaw = wrapf(_network_yaw + steer * turn_rate * dt + _step_contact_yaw(dt, steer, brake or throttle < 0.0), -PI, PI)
+	_network_apply_frame(road)
+	var facing: Vector3 = -basis.z
+	var racer_right: Vector3 = basis.x
+	var side_speed: float = plane_velocity.dot(racer_right)
+	var grip: float = 4.5 if brake else 8.5
+	if airborne:
+		grip = 0.7
+	grip *= _assembly_lateral_grip
+	plane_velocity -= racer_right * side_speed * (1.0 - exp(-grip * dt))
+	var acceleration: float = (50.0 if boosting else 32.0) + (last_drift_stage * 12.0 if _drift_boost_time > 0.0 else 0.0)
+	# Reverse first brakes forward momentum firmly on the Dog slopes, then
+	# uses the normal reverse motor. Otherwise a downhill entry can carry
+	# the racer far beyond the shared apron before reverse engages.
+	if _track._course == 6 and throttle < 0.0 and plane_velocity.dot(facing) > 1.0:
+		acceleration *= 2.0
+	plane_velocity += facing * acceleration * throttle * dt * (0.42 if airborne else 1.0)
+	if not airborne:
+		plane_velocity += (Vector3.DOWN * GRAVITY - frame_up * Vector3.DOWN.dot(frame_up) * GRAVITY) * dt
+	# Wind adds forward force on the drivable tube deck; it never owns input,
+	# yaw, lane or position. Releasing W or braking disables the assistance.
+	var tube_wind: bool = false
+	if _route_kind == "tube" and not airborne and throttle > 0.0 and not brake:
+		for tube: Dictionary in _track.network_features.get("tubes", []):
+			if route_id == str(tube["route_id"]) and route_distance >= float(tube["start"]) and route_distance <= float(tube["end"]):
+				tube_wind = true
+				break
+	if tube_wind:
+		plane_velocity += frame_forward * 24.0 * throttle * dt
+	plane_velocity *= exp(-(0.17 if throttle <= 0.0 else 0.065) * dt - (0.10 * dt if brake else 0.0))
+	var top_speed: float = (BOOST_TOP_SPEED if boosting else NORMAL_TOP_SPEED) + (6.0 + last_drift_stage * 6.0 if _drift_boost_time > 0.0 else 0.0)
+	if tube_wind:
+		top_speed = maxf(top_speed, 120.0)
+	var speed_ceiling: float = maxf(top_speed, move_toward(old_speed, top_speed, dt * 22.0))
+	if plane_velocity.length() > speed_ceiling:
+		plane_velocity = plane_velocity.normalized() * speed_ceiling
+	var reversing: float = plane_velocity.dot(facing)
+	if reversing < -18.0:
+		plane_velocity += facing * (-18.0 - reversing)
+	if airborne:
+		_network_jump_speed -= GRAVITY * dt
+		_network_jump_height += _network_jump_speed * dt
+		if _network_jump_height <= 0.0:
+			airborne = false
+			_network_jump_height = 0.0
+			_network_jump_speed = 0.0
+			_emit_event("landed")
+	# Position advances from actual velocity. Projection supplies contact and
+	# race distance; it never replaces steering with a chosen lane or tangent.
+	position += plane_velocity * dt
+	if _track._course == 6 and route_id == "main" and not airborne:
+		plane_velocity = _network_obstacle_contact(plane_velocity)
+	var entered: Dictionary = _track.network_entry(before_position, position, plane_velocity) if route_id == "main" and not airborne else {}
+	if not entered.is_empty():
+		route_id = str(entered["route_id"])
+		route_distance = float(entered["distance"])
+		_emit_event("route")
+	road = _track.network_nearest(position, route_distance, route_id)
+	if _track._course in [4, 6, 10] and route_id != str(road["route_id"]):
+		route_id = str(road["route_id"])
+		_emit_event("route")
+	if _track._course == 10 and not bool(road.get("has_floor", true)):
+		# Leave the shaped lip with the actual incoming world velocity before
+		# the floorless reference segment can flatten the driving frame.
+		velocity = plane_velocity + frame_up * _network_jump_speed
+		route_distance = float(road.distance)
+		_network_vent = {"freight_jump": true, "elapsed": 0.0, "takeoff_distance": previous}
+		vent_active = true
+		airborne = true
+		bracing = false
+		drifting = false
+		drift_charge = 0.0
+		drift_stage = 0
+		_drift_held = false
+		_network_jump_height = 0.0
+		_network_jump_speed = 0.0
+		_emit_event("jump")
+		_network_record_progress(previous)
+		return
+	var new_up: Vector3 = road["up"]
+	var transport: Basis = Basis(Quaternion(frame_up, new_up))
+	var transported_facing: Vector3 = transport * facing
+	plane_velocity = transport * plane_velocity
+	_network_yaw = atan2(transported_facing.dot(Vector3(road["right"])), transported_facing.dot(Vector3(road["forward"])))
+	_network_apply_frame(road)
+	lateral_offset = float(road["offset"])
+	if _track._course == 6 and (_track._network as DogCircuit).drop_edge(float(road.distance), str(road.route_id), -1.0) and lateral_offset < -float(road.width) * 0.5 + BODY_RADIUS:
+		# The marked outside lip has no rail. Preserve the actual exit velocity.
+		_network_vent = {"dog_drop": true, "elapsed": 0.0, "launch_distance": float(road.distance)}
+		vent_active = true
+		airborne = true
+		velocity = plane_velocity + frame_up * _network_jump_speed
+		route_distance = float(road.distance)
+		_network_jump_height = 0.0
+		_network_jump_speed = 0.0
+		_emit_event("jump")
+		_network_record_progress(previous)
+		return
+	if not bool(road.get("has_floor", true)):
+		# Driving slowly past the launch lip cannot attach to the decorative
+		# flight arc. Once there is no deck, the body is genuinely airborne.
+		route_distance = float(road["distance"])
+		velocity = plane_velocity + frame_up * _network_jump_speed
+		_network_enter_transit(before_position)
+		if not vent_active:
+			_network_vent = (_track.network_features["vents"][0] as Dictionary).duplicate(true)
+			_network_vent_elapsed = 0.0
+			vent_active = true
+			airborne = true
+			bracing = false
+			drifting = false
+			drift_charge = 0.0
+			drift_stage = 0
+			_drift_held = false
+		_network_record_progress(previous)
+		speed = velocity.length()
+		_update_visuals(dt, steer, side_speed)
+		return
+	var surface_gap: float = (position - Vector3(road["position"])).dot(frame_up)
+	position += frame_up * (HOVER_HEIGHT + _network_jump_height - surface_gap)
+	var half_width: float = maxf(1.0, float(road["width"]) * 0.5 - BODY_RADIUS)
+	var open_edge: bool = bool(road.get("open_right" if lateral_offset > 0.0 else "open_left", false))
+	if is_instance_valid(linked_frame):
+		velocity = plane_velocity
+		# Only detailed edge contacts need per-module network projections.
+		# This generous bounding circle also covers local width/curvature change.
+		if absf(lateral_offset) + body_bound() + 2.0 >= float(road.width) * 0.5:
+			_frame_wall_contact()
+		plane_velocity = velocity
+		lateral_offset = (position - Vector3(road.position)).dot(frame_right)
+	elif absf(lateral_offset) > half_width and not open_edge:
+		var wall_normal: Vector3 = frame_right * signf(lateral_offset)
+		position -= wall_normal * (absf(lateral_offset) - half_width)
+		lateral_offset = clampf(lateral_offset, -half_width, half_width)
+		plane_velocity = _wall_response(plane_velocity, wall_normal, road)
+
+	route_distance = float(road["distance"])
+	# The supporting deck owns every merge, including Dog's forks. Reaching
+	# a canonical endpoint alone cannot move the racer to another surface.
+	velocity = plane_velocity + frame_up * _network_jump_speed
+	speed = plane_velocity.length()
+	_network_lane_speed = plane_velocity.dot(frame_right)
+	drift_amount = lerpf(drift_amount, absf(side_speed) / 40.0 if brake else 0.0, 1.0 - exp(-dt * 6.0))
+	_network_record_progress(previous)
+	_network_loop_reward(previous, previous_route)
+	_network_pads()
+	_network_enter_transit(before_position)
+	_update_visuals(dt, steer, side_speed)
+	_visual.rotation.x = clampf(-_network_jump_speed * 0.018, -0.25, 0.28) if airborne else 0.0
+	if not position.is_finite() or not velocity.is_finite():
+		_reset_network(route_distance, 0.0)
+		_emit_event("recover")
+
+func _step_freight_flight(dt: float, throttle: float, steer: float, brake: bool, boost: bool) -> void:
+	var previous := route_distance
+	var before := position
+	_network_vent.elapsed = float(_network_vent.elapsed) + dt
+	var flat := Vector3(velocity.x, 0.0, velocity.z)
+	flat = flat.rotated(Vector3.UP, -steer * 0.9 * dt)
+	var direction := flat.normalized() if flat.length_squared() > 0.1 else Vector3(frame_forward.x, 0, frame_forward.z).normalized()
+	var manual_boost := boost and boost_energy > 0.2 and throttle > 0.0
+	flat += direction * (21.0 if manual_boost else 13.4) * throttle * dt
+	flat *= exp(-(0.22 if throttle < 0.0 or brake else 0.025) * dt)
+	if manual_boost:
+		boost_energy = maxf(0.0, boost_energy - 25.0 * dt)
+	else:
+		boost_energy = minf(100.0, boost_energy + 9.0 * dt)
+	velocity = Vector3(flat.x, velocity.y - GRAVITY * dt, flat.z)
+	position += velocity * dt
+	var road := (_track._network as FreightwayCircuit).flight_contact(position, route_distance, route_id)
+	if not road.is_empty():
+		route_distance = float(road.distance)
+		var up := Vector3(road.up)
+		var previous_gap := (before - Vector3(road.position)).dot(up)
+		var gap := float(road.surface_gap)
+		var supported := bool(road.has_floor) and absf(float(road.offset)) < float(road.width) * 0.5 - body_radius() and float(road.longitudinal) < 3.5
+		if supported and is_instance_valid(linked_frame) and previous_gap >= HOVER_HEIGHT - 0.05 and gap <= HOVER_HEIGHT:
+			supported = _freight_frame_landing_supported()
+		if supported and previous_gap >= HOVER_HEIGHT - 0.05 and gap <= HOVER_HEIGHT and velocity.dot(up) < 0.0:
+			position += up * (HOVER_HEIGHT - gap)
+			velocity -= up * velocity.dot(up)
+			_network_yaw = atan2(velocity.dot(Vector3(road.right)), velocity.dot(Vector3(road.forward)))
+			_network_apply_frame(road)
+			vent_active = false
+			airborne = false
+			_network_vent.clear()
+			_emit_event("landed")
+		elif position.y < Vector3(road.position).y - 40.0 or float(_network_vent.elapsed) > 6.0:
+			# Missing the deck returns to the takeoff approach and costs time.
+			# No recovery can advance through a gap or award a checkpoint.
+			var reset_distance := float(_network_vent.takeoff_distance) - 80.0
+			vent_active = false
+			_network_vent.clear()
+			_reset_network(reset_distance, 0.0)
+			_emit_event("recover")
+	_network_record_progress(previous)
+	speed = Vector3(velocity.x, 0.0, velocity.z).length()
+	if flat.length_squared() > 0.1:
+		camera_heading = atan2(-flat.x, -flat.z)
+	_update_visuals(dt, steer, 0.0)
+
+func _freight_frame_landing_supported() -> bool:
+	var freight := _track._network as FreightwayCircuit
+	# A Sky Transfer landing needs solid floor under the entire frame.
+	# The lower main road at a crossover cannot catch the chosen upper deck.
+	for center: Vector3 in body_centers():
+		for direction: Vector3 in [Vector3.ZERO, basis.x, -basis.x, -basis.z, basis.z]:
+			var probe := center + direction * body_radius()
+			var contact := freight.flight_contact(probe, route_distance, route_id)
+			if contact.is_empty() or not bool(contact.has_floor) or absf(float(contact.offset)) > float(contact.width) * 0.5 or float(contact.longitudinal) > 1.0:
+				return false
+	return true
+
+func _step_dog_drop(dt: float, throttle: float, steer: float, brake: bool, boost: bool) -> void:
+	var previous := route_distance
+	var before := position
+	var old_velocity := velocity
+	_network_vent.elapsed = float(_network_vent.elapsed) + dt
+	_network_yaw = wrapf(_network_yaw + steer * 0.65 * dt, -PI, PI)
+	_network_apply_frame(_track.network_sample(route_distance, "main"))
+	var facing := Vector3(-basis.z.x, 0.0, -basis.z.z).normalized()
+	var side := Vector3(basis.x.x, 0.0, basis.x.z).normalized()
+	velocity += Vector3.DOWN * GRAVITY * dt + side * steer * 8.0 * dt
+	boosting = boost and throttle > 0.0 and boost_energy > 0.2
+	velocity += facing * throttle * (5.0 if boosting else 1.5) * dt
+	boost_energy = maxf(0.0, boost_energy - 25.0 * dt) if boosting else minf(100.0, boost_energy + 9.0 * dt)
+	if throttle < 0.0 or brake:
+		velocity -= Vector3(velocity.x, 0.0, velocity.z) * (1.0 - exp(-dt * 0.18))
+	position += (old_velocity + velocity) * 0.5 * dt
+	var dog := _track._network as DogCircuit
+	var floor := dog.drop_contact(position)
+	var old_gap := (before - Vector3(floor.position)).dot(Vector3(floor.up))
+	var gap := float(floor.surface_gap)
+	var longitudinal := absf((position - Vector3(floor.position)).dot(Vector3(floor.forward)))
+	# Test a swept crossing of the real receiving deck, rather than snapping
+	# to it from above. Missing the road continues the fall.
+	var lands := velocity.dot(Vector3(floor.up)) < 0.0 and old_gap >= HOVER_HEIGHT and gap <= HOVER_HEIGHT and absf(float(floor.offset)) < float(floor.width) * 0.5 - BODY_RADIUS and longitudinal < 4.0
+	# Score the same lower-road station throughout flight. The change per frame
+	# stays bounded; landing cannot award an instantaneous skipped quarter gate.
+	route_distance = move_toward(route_distance, float(floor.distance), 180.0 * dt)
+	if lands:
+		position += Vector3(floor.up) * (HOVER_HEIGHT - gap)
+		velocity -= Vector3(floor.up) * velocity.dot(Vector3(floor.up))
+		route_id = "drift_drop"
+		route_distance = float(floor.distance)
+		_network_apply_frame(floor)
+		_network_yaw = atan2(velocity.dot(Vector3(floor.right)), velocity.dot(Vector3(floor.forward)))
+		vent_active = false
+		airborne = false
+		_network_vent.clear()
+		_network_feature_cooldown = 1.0
+		_emit_event("landed")
+	elif position.y < -35.0 or float(_network_vent.elapsed) > 8.0:
+		_reset_network(previous, 0.0)
+		_emit_event("recover")
+	lateral_offset = float(floor.offset)
+	speed = velocity.length()
+	_network_record_progress(previous)
+	_update_visuals(dt, steer, velocity.dot(side))
+
+func _network_loop_reward(previous: float, previous_route: String) -> void:
+	if previous_route not in ["loop", "loop_wide"] or route_id != previous_route:
+		return
+	var route: Dictionary = _track._network.routes[route_id]
+	var finish: float = route["loop_end"]
+	var token: String = "%s:%d" % [route_id, int(floor(total_progress / _track.length))]
+	if previous < finish and route_distance >= finish and not _network_loop_rewards.has(token):
+		_network_loop_rewards[token] = true
+		_pad_boost_time = maxf(_pad_boost_time, 1.8)
+		velocity += -basis.z * 10.0
+		boost_energy = minf(100.0, boost_energy + 18.0)
+		boosting = true
+		_emit_event("pad")
+
+func _network_record_progress(previous: float) -> void:
+	var difference: float = wrapf(route_distance - previous, -_track.length * 0.5, _track.length * 0.5)
+	total_progress += difference
+	_previous_distance = route_distance
+
+
+func _network_pads() -> void:
+	if airborne or controls_locked or vent_active:
+		return
+	# Forward boost strips must not trap a driver reversing through a fork.
+	# S retains its normal motor instead of receiving an opposing pad impulse.
+	var moving_forward := velocity.dot(-basis.z) >= -0.1
+	var touching_pad: bool = false
+	for pad: Dictionary in _track.boosts:
+		if not _inside_pad(pad):
+			continue
+		touching_pad = true
+		var key: String = "%s:%.2f" % [str(pad.get("route_id", "main")), float(pad["distance"])]
+		# A distinct strip can trigger immediately after the preceding strip;
+		# remaining on one strip cannot replay its impulse every frame.
+		if moving_forward and key != _network_last_pad and _boost_pad_cooldown <= 0.0:
+			_network_last_pad = key
+			_pad_boost_time = 1.65
+			_boost_pad_cooldown = 0.18
+			boost_energy = minf(100.0, boost_energy + 22.0)
+			velocity += -basis.z * maxf(0.0, 82.0 - speed)
+			boosting = true
+			_emit_event("pad")
+		break
+	if not touching_pad:
+		_network_last_pad = ""
+	if moving_forward and _jump_pad_cooldown <= 0.0 and _network_combat_allowed():
+		for ramp: Dictionary in _track.jumps:
+			if _inside_pad(ramp) and speed > 12.0:
+				hop(11.0 + minf(speed, BOOST_TOP_SPEED) * 0.085)
+				_jump_pad_cooldown = 2.0
+				break
+
+func _network_enter_transit(before_position: Vector3) -> void:
+	var in_tube := false
+	for tube: Dictionary in _track.network_features.get("tubes", []):
+		if route_id == str(tube["route_id"]) and route_distance >= float(tube["start"]) and route_distance <= float(tube["end"]):
+			in_tube = true
+			if _network_tube.is_empty():
+				_network_tube = tube.duplicate(true)
+				_emit_event("tube_enter")
+	if not in_tube and not _network_tube.is_empty():
+		_network_tube.clear()
+		_emit_event("tube_exit")
+	if _network_feature_cooldown > 0.0 or airborne:
+		return
+	for vent: Dictionary in _track.network_features.get("vents", []):
+		if route_id != str(vent.get("route_id", "vent")):
+			continue
+		var deck: Dictionary = _track.network_sample(float(vent["start"]) - 0.001, "vent")
+		var from: float = (before_position - Vector3(deck["position"])).dot(Vector3(deck["forward"]))
+		var to: float = (position - Vector3(deck["position"])).dot(Vector3(deck["forward"]))
+		var offset: Vector3 = position - Vector3(deck["position"])
+		if from <= 1.0 and to >= -0.1 and to < 5.0 and velocity.dot(Vector3(deck["forward"])) > 18.0 and absf(offset.dot(Vector3(deck["right"]))) < float(vent["deck_radius"]) - BODY_RADIUS:
+			_network_vent = vent.duplicate(true)
+			_network_vent_elapsed = 0.0
+			# The fan supplies a launch impulse along its visible arc. Existing
+			# lateral motion survives; no recentering or flight-position lock.
+			var launch_velocity: Vector3 = vent["launch_velocity"]
+			velocity += Vector3(deck["forward"]) * maxf(0.0, launch_velocity.length() - velocity.dot(Vector3(deck["forward"])))
+			velocity += Vector3.UP * maxf(0.0, launch_velocity.y - velocity.y)
+			vent_active = true
+			airborne = true
+			bracing = false
+			drifting = false
+			drift_charge = 0.0
+			drift_stage = 0
+			_drift_held = false
+			ram_windup = 0.0
+			_ram_target = null
+			_emit_event("vent")
+			return
+
+
+func _step_network_vent(dt: float, throttle: float, steer: float, brake: bool, boost: bool) -> void:
+	var previous: float = route_distance
+	var before_velocity := velocity
+	_network_vent_elapsed += dt
+	_network_yaw = wrapf(_network_yaw + steer * 0.65 * dt, -PI, PI)
+	var air_road: Dictionary = _track.network_sample(route_distance, route_id)
+	_network_apply_frame(air_road)
+	var air_right := Vector3(frame_right.x, 0.0, frame_right.z).normalized()
+	var air_forward := Vector3(frame_forward.x, 0.0, frame_forward.z).normalized()
+	# Bounded air control is force, not corridor correction. Holding a turn
+	# can miss the landing, and the player can recover with R at any time.
+	velocity += Vector3.DOWN * GRAVITY * dt
+	velocity += air_right * steer * 8.0 * dt
+	# Air resistance damps sideways speed, without aiming at a corridor or
+	# changing position. A turn still shifts the real landing point.
+	velocity -= air_right * velocity.dot(air_right) * (1.0 - exp(-1.6 * dt))
+	velocity += air_forward * throttle * (5.0 if boost and boost_energy > 0.2 else 1.5) * dt
+	boosting = boost and throttle > 0.0 and boost_energy > 0.2
+	if boosting:
+		boost_energy = maxf(0.0, boost_energy - dt * 25.0)
+	else:
+		boost_energy = minf(100.0, boost_energy + dt * 9.0)
+	if throttle < 0.0 or brake:
+		var horizontal := Vector3(velocity.x, 0.0, velocity.z)
+		velocity -= horizontal * (1.0 - exp(-dt * (0.16 if brake else 0.24)))
+	position += (before_velocity + velocity) * 0.5 * dt
+	var road := _track.network_nearest(position, route_distance, route_id)
+	route_distance = float(road["distance"])
+	# The first landing sample is a real deck, beyond the floorless arc.
+	if str(road.get("kind", "")) == "vent_air" and route_distance >= float(_network_vent["end"]) - 3.0:
+		road = _track.network_sample(float(_network_vent["end"]) + 0.02, "vent")
+		road["offset"] = (position - Vector3(road["position"])).dot(Vector3(road["right"]))
+		road["surface_gap"] = (position - Vector3(road["position"])).dot(Vector3(road["up"]))
+	var gap := (position - Vector3(road["position"])).dot(Vector3(road["up"]))
+	var longitudinal := (position - Vector3(road["position"])).dot(Vector3(road["forward"]))
+	var half_width := float(road.get("width", 24.0)) * 0.5 - BODY_RADIUS
+	var reaches_deck := bool(road.get("has_floor", false)) and float(road["distance"]) >= float(_network_vent["end"]) and absf(longitudinal) < 4.0 and absf(float(road.get("offset", 0.0))) < half_width
+	var descending := velocity.y < 0.0
+	if reaches_deck and descending and gap <= HOVER_HEIGHT + 0.8 and gap >= -1.2:
+		var landing_up: Vector3 = road["up"]
+		position += landing_up * (HOVER_HEIGHT - gap)
+		velocity -= landing_up * velocity.dot(landing_up)
+		route_distance = float(road["distance"])
+		_network_yaw = atan2(velocity.dot(Vector3(road["right"])), velocity.dot(Vector3(road["forward"])))
+		vent_active = false
+		airborne = false
+		_network_jump_height = 0.0
+		_network_jump_speed = 0.0
+		_network_vent.clear()
+		_network_feature_cooldown = 1.0
+		_emit_event("landed")
+	elif position.y < float(_network_vent["landing_position"].y) - 45.0 or _network_vent_elapsed > 8.0:
+		_reset_network(route_distance, 0.0)
+		_emit_event("recover")
+	road = _track.network_sample(route_distance, route_id)
+	_network_apply_frame(road)
+	lateral_offset = (position - Vector3(road["position"])).dot(frame_right)
+	speed = velocity.length()
+	_network_record_progress(previous)
+	_update_visuals(dt, steer, velocity.dot(frame_right))
+	if not position.is_finite() or not velocity.is_finite():
+		_reset_network(previous, 0.0)
+		_emit_event("recover")
+
+
+func _step_network_ai(delta: float, skill: float) -> void:
+	if vent_active:
+		if bool(_network_vent.get("freight_jump", false)):
+			# Follow the visible landing direction through ordinary air steering.
+			var target := _track.network_sample(route_distance + 70.0, route_id)
+			var flat := Vector3(velocity.x, 0.0, velocity.z)
+			var wanted := Vector3(target.position) - position
+			wanted.y = 0.0
+			var correction := clampf(flat.normalized().signed_angle_to(wanted.normalized(), Vector3.UP) * -2.0, -0.35, 0.35)
+			_step_network(delta, 0.0, correction, false, false)
+			return
+		var landing: Vector3
+		if bool(_network_vent.get("dog_drop", false)):
+			var ahead := position + Vector3(velocity.x, 0.0, velocity.z) * 0.65
+			landing = (_track._network as DogCircuit).drop_contact(ahead).position
+		else:
+			landing = _network_vent["landing_position"]
+		var offset: Vector3 = landing - position
+		var correction := clampf(offset.dot(frame_right) * 0.04 - velocity.dot(frame_right) * 0.08, -1.0, 1.0)
+		_step_network(delta, 0.0, correction, false, false)
+		return
+	var fork: Dictionary = _track.fork_at(route_distance, 150.0)
+	if route_id == "main" and not fork.is_empty() and float(fork.get("gap", -1.0)) >= -RouteNetwork.ENTRY_GUARD:
+		var start: float = float(fork["start"])
+		if not is_equal_approx(start, _network_ai_fork):
+			_network_ai_fork = start
+			var options: Array = fork["choices"]
+			# Body Orbit bypasses the mouth fork. Different choice parity there
+			# lets rivals on Main try the mouth on the other laps.
+			var choice_offset := 0
+			if _track._course == 6:
+				for option: Dictionary in options:
+					if str(option.route_id) == "mouth_slink": choice_offset = 1
+			var index: int = posmod(route_seed + choice_offset + int(maxf(0.0, total_progress) / maxf(1.0, _track.length)), options.size())
+			_network_ai_route = str(options[index]["route_id"])
+			_network_ai_entry_cursor = 0
+	var lookahead: float = 12.0 + speed * 0.24 + body_bound() - BODY_RADIUS
+	var target_route: String = route_id
+	var target_distance: float = route_distance + lookahead
+	var target_position: Vector3
+	if route_id == "main" and _network_ai_route != "main" and not fork.is_empty():
+		var selected: Dictionary = _track._network.routes[_network_ai_route]
+		var entry_end := float(selected.get("station_entry_end", float(selected["start"]) + float(selected.get("shared_entry", 105.0))))
+		if route_distance >= entry_end:
+			# A rival that misses the real mouth keeps racing on Main. Chasing
+			# an elevated branch beyond its connecting apron creates an orbit
+			# around an unreachable target; it cannot create another entrance.
+			_network_ai_route = "main"
+		elif target_distance >= float(selected["start"]):
+			target_position = _track.network_sample(target_distance, _network_ai_route)["position"]
+	if target_position == Vector3.ZERO:
+		if route_id != "main":
+			target_distance = _track._network.advance_physical(route_distance, route_id, lookahead)
+		var target: Dictionary = _track.network_sample(target_distance, target_route)
+		target_position = Vector3(target["position"]) + Vector3(target["right"]) * _ai_offset
+	var wanted: Vector3 = target_position - position
+	wanted -= frame_up * wanted.dot(frame_up)
+	if wanted.length_squared() < 0.01:
+		wanted = frame_forward
+	wanted = wanted.normalized()
+	var facing: Vector3 = -basis.z
+	var turn_error: float = atan2(wanted.dot(basis.x), wanted.dot(facing))
+	var steer: float = clampf(turn_error * 2.8, -1.0, 1.0)
+	var approaching_mouth: bool = route_id == "main" and _network_ai_route != "main" and not fork.is_empty()
+	var target_speed: float = 48.0 if approaching_mouth else (112.0 if _route_kind == "tube" else 55.0 + clampf(skill, 0.4, 1.1) * 9.0)
+	var vent_runup: bool = _track._course == 4 and route_id == "vent" and route_distance < float(_track.network_features["vents"][0]["start"])
+	if _track._course == 10 and route_id == "skydeck":
+		# Carry ordinary race speed across the visible platform sequence.
+		# Boosting remains a player option with a longer landing commitment.
+		target_speed = minf(target_speed, 65.0)
+		vent_runup = true
+	if vent_runup:
+		# The fan adds an impulse; it cannot remove excess launch momentum.
+		# Rivals brake along the visible run-up instead of boosting past the
+		# landing. The player's controls and launch physics stay the same.
+		target_speed = minf(target_speed, 56.0)
+	var tube_bend_ahead := false
+	if _track._course == 4 and route_id == "tube":
+		# The ordinary steering lookahead is too short to brake from tube
+		# wind speed. Read the same visible road at the stopping distance.
+		var stopping_distance := clampf((speed * speed - 76.0 * 76.0) / 64.0 + 45.0, 45.0, 210.0)
+		for fraction: float in [0.5, 1.0]:
+			var ahead_distance := _track._network.advance_physical(route_distance, route_id, stopping_distance * fraction)
+			var ahead: Dictionary = _track.network_sample(ahead_distance, route_id)
+			if frame_forward.dot(Vector3(ahead["forward"])) < 0.84:
+				tube_bend_ahead = true
+		if float(_track._network.routes["tube"]["end"]) - route_distance < stopping_distance:
+			tube_bend_ahead = true
+		if tube_bend_ahead:
+			target_speed = minf(target_speed, 76.0)
+	if absf(turn_error) > 0.25:
+		# Slow progressively as the target moves off the nose. A sharp speed
+		# cutoff lets a spun rival accelerate halfway through its recovery
+		# turn and circle the waypoint forever. Ordinary braking keeps the
+		# turn tight until the racer can face the road ahead again.
+		var turning_speed := 12.0 + 36.0 * exp(-3.0 * (absf(turn_error) - 0.15))
+		target_speed = minf(target_speed, turning_speed)
+	var throttle: float = clampf((target_speed - speed) * 0.16 + 0.16, -1.0, 1.0)
+	if boost_energy < 15.0 or absf(turn_error) > 0.28 or approaching_mouth or tube_bend_ahead or vent_runup:
+		_ai_boost_held = false
+	elif boost_energy > 75.0 and speed > 42.0:
+		_ai_boost_held = true
+	if _ai_boost_held:
+		throttle = 1.0
+	_step_network(delta, throttle, steer, _ai_defend_time > 0.0, _ai_boost_held)
+
+
+func _network_obstacle_contact(plane_velocity: Vector3) -> Vector3:
+	for obstacle: Dictionary in _obstacle_world:
+		var gap := absf(wrapf(float(obstacle.distance) - route_distance, -_track.length * 0.5, _track.length * 0.5))
+		if gap > 14.0:
+			continue
+		var difference := position - Vector3(obstacle.position)
+		if absf(difference.dot(frame_up) - HOVER_HEIGHT) > 2.5:
+			continue
+		difference -= frame_up * difference.dot(frame_up)
+		var radius := BODY_RADIUS + float(obstacle.radius)
+		if difference.length() >= radius:
+			continue
+		var normal := difference.normalized() if difference.length() > 0.01 else -frame_forward
+		position += normal * (radius - difference.length() + 0.03)
+		var incoming := plane_velocity.dot(normal)
+		if incoming < 0.0:
+			var before_contact: Vector3 = plane_velocity
+			plane_velocity -= normal * incoming * 1.48
+			plane_velocity *= 0.92
+			if _obstacle_cooldown <= 0.0:
+				_apply_contact_rotation(normal, before_contact, -incoming, "obstacle")
+				drift_charge = 0.0
+				drift_stage = 0
+				_obstacle_cooldown = 0.5
+				_emit_event("bounce")
+	return plane_velocity
+
+
+func _network_ai_mouth_target(id: String, mouth_distance: float, lookahead: float) -> Vector3:
+	# A navigation plan supplies waypoints, not a route assignment. The AI
+	# steers the same yaw/velocity as the player and must cross the same gap.
+	var mouth: Dictionary = _track.network_sample(mouth_distance, id)
+	var mouth_position: Vector3 = Vector3(mouth["position"]) + Vector3(mouth["up"]) * HOVER_HEIGHT
+	var start: Dictionary = _track.sample(mouth_distance - 150.0)
+	var lead: Dictionary = _track.sample(mouth_distance - 72.0)
+	var path := PackedVector3Array([
+		Vector3(start["position"]) + Vector3(start["up"]) * HOVER_HEIGHT,
+		Vector3(lead["position"]) + Vector3(lead["up"]) * HOVER_HEIGHT,
+		mouth_position - Vector3(mouth["forward"]) * 28.0,
+		mouth_position,
+		mouth_position + Vector3(mouth["forward"]) * 10.0])
+	var best: float = INF
+	var target: Vector3 = path[mini(_network_ai_entry_cursor, 3)]
+	var best_segment: int = _network_ai_entry_cursor
+	for index in range(_network_ai_entry_cursor, 4):
+		var edge: Vector3 = path[index + 1] - path[index]
+		var fraction: float = clampf((position - path[index]).dot(edge) / maxf(0.001, edge.length_squared()), 0.0, 1.0)
+		var projected: Vector3 = path[index] + edge * fraction
+		var squared: float = position.distance_squared_to(projected)
+		if squared < best:
+			best = squared
+			target = projected
+			best_segment = index
+	_network_ai_entry_cursor = best_segment
+	var remaining: float = lookahead
+	for index in range(best_segment + 1, path.size()):
+		var gap: float = target.distance_to(path[index])
+		if gap >= remaining:
+			return target.lerp(path[index], remaining / maxf(0.001, gap))
+		target = path[index]
+		remaining -= gap
+	return target
+
+func _network_combat_allowed() -> bool:
+	return not controls_locked and not vent_active and not airborne and frame_up.y > 0.65 and _route_kind in ["road", "glass"]
+
+
+func _network_collide(other: GlyphRacer) -> void:
+	# Connected roads share body contact too. A route label cannot let racers
+	# pass through one another on the same apron; separation and deck normals
+	# still keep the elevated and inverted roads apart.
+	if controls_locked or other.controls_locked or vent_active or other.vent_active or frame_up.dot(other.frame_up) < 0.7:
+		return
+	if absf(wrapf(route_distance - other.route_distance, -_track.length * 0.5, _track.length * 0.5)) > 12.0:
+		return
+	var offset: Vector3 = position - other.position
+	if absf(offset.dot(frame_up)) > 1.7:
+		return
+	var planar: Vector3 = offset - frame_up * offset.dot(frame_up)
+	var separation: float = planar.length()
+	var min_distance: float = BODY_RADIUS * 2.1
+	if separation >= min_distance:
+		return
+	var normal: Vector3 = planar / separation if separation > 0.001 else frame_right
+	var correction: Vector3 = normal * (min_distance - separation) * 0.5
+	# Shift ribbon coordinates as well as the displayed body, so a collision
+	# is retained by the following frame instead of being erased by the rail.
+	lateral_offset += correction.dot(frame_right)
+	other.lateral_offset -= correction.dot(other.frame_right)
+	var road: Dictionary = _track.network_sample(route_distance, route_id)
+	var other_road: Dictionary = _track.network_sample(other.route_distance, other.route_id)
+	var adjustment: float = correction.dot(frame_forward) * float(road.get("progress_scale", 1.0))
+	var other_adjustment: float = -correction.dot(other.frame_forward) * float(other_road.get("progress_scale", 1.0))
+	route_distance = fposmod(route_distance + adjustment, _track.length)
+	other.route_distance = fposmod(other.route_distance + other_adjustment, _track.length)
+	total_progress += adjustment
+	other.total_progress += other_adjustment
+	position += correction
+	other.position -= correction
+	_resolve_body_impulse(other, normal)
+
+
+func reset_contact_telemetry() -> void:
+	_contact_stats = {"brushes": 0, "hard_hits": 0, "spinouts": 0,
+		"repeated_impact_suppression": 0, "recoveries": 0,
+		"recovery_total": 0.0, "recovery_last": 0.0, "recovery_max": 0.0,
+		"wall_contacts": 0, "wall_duration_max": 0.0, "last_wall": {}, "last_contact": {}}
+
+
+func contact_snapshot() -> Dictionary:
+	var report := _contact_stats.duplicate(true)
+	report["frame"] = linked_frame.snapshot() if is_instance_valid(linked_frame) else {"enabled": false}
+	report["recovering"] = _contact_recovering
+	report["recovery_elapsed"] = _contact_recovery_elapsed
+	report["yaw_velocity"] = _contact_yaw_velocity
+	report["wall_continuous"] = _wall_continuous
+	return report
+
+
+func _reset_contact_motion() -> void:
+	_contact_yaw_velocity = 0.0
+	_contact_recovering = false
+	_contact_recovery_elapsed = 0.0
+	_contact_pairs.clear()
+	_wall_touch_frame = false
+	_wall_continuous = 0.0
+	_wall_contact_gap = 1.0
+	_wall_major_active = false
+
+
+func _tick_contact_guards(dt: float) -> void:
+	_contact_step_dt = dt
+	for id: Variant in _contact_pairs.keys():
+		_contact_pairs[id] = float(_contact_pairs[id]) - dt
+		if float(_contact_pairs[id]) <= 0.0:
+			_contact_pairs.erase(id)
+	_wall_contact_gap += dt
+	if _wall_touch_frame:
+		_wall_continuous += dt
+		_contact_stats["wall_duration_max"] = maxf(float(_contact_stats.get("wall_duration_max", 0.0)), _wall_continuous)
+	elif _wall_contact_gap > 0.12:
+		_wall_continuous = 0.0
+		_wall_major_active = false
+	_wall_touch_frame = false
+
+
+func _step_contact_yaw(dt: float, steer: float, brake: bool) -> float:
+	if absf(_contact_yaw_velocity) < 0.001:
+		return 0.0
+	var turn: float = _contact_yaw_velocity * dt
+	# Countersteering actively removes angular momentum. Both reverse/brake
+	# throttle (S) and Space bracing stabilize the slide; the normal motor,
+	# steering and boost paths still run alongside.
+	if steer * _contact_yaw_velocity < 0.0:
+		_contact_yaw_velocity = move_toward(_contact_yaw_velocity, 0.0, absf(steer) * 4.2 * dt)
+	var damping: float = (3.6 if brake else 1.45) if _contact_recovering else 3.0
+	damping *= _assembly_yaw_damping
+	_contact_yaw_velocity *= exp(-damping * dt)
+	if _contact_recovering:
+		_contact_recovery_elapsed += dt
+		if (absf(_contact_yaw_velocity) < 0.18 and _contact_recovery_elapsed > 0.2) or _contact_recovery_elapsed >= CONTACT_RECOVERY_LIMIT:
+			_contact_recovering = false
+			_contact_stats["recoveries"] = int(_contact_stats.get("recoveries", 0)) + 1
+			_contact_stats["recovery_last"] = _contact_recovery_elapsed
+			_contact_stats["recovery_total"] = float(_contact_stats.get("recovery_total", 0.0)) + _contact_recovery_elapsed
+			_contact_stats["recovery_max"] = maxf(float(_contact_stats.get("recovery_max", 0.0)), _contact_recovery_elapsed)
+			_emit_event("contact_recovered")
+	return turn
+
+
+func _contact_right() -> Vector3:
+	return basis.x if _is_route_network() else Vector3(cos(heading), 0.0, -sin(heading))
+
+func receive_weapon_hit(direction: Vector3, spinout: bool) -> bool:
+	if not _configured or not _network_combat_allowed() or _contact_recovering:
+		return false
+	var side := direction.dot(_contact_right())
+	if spinout:
+		velocity *= 0.72
+		_contact_yaw_velocity = (-1.0 if side < 0.0 else 1.0) * 3.8
+		_contact_recovering = true
+		_contact_recovery_elapsed = 0.0
+		_contact_stats["spinouts"] = int(_contact_stats.get("spinouts", 0)) + 1
+		drift_charge = 0.0
+		drift_stage = 0
+		_emit_event("contact_spinout")
+	else:
+		velocity += direction.normalized() * (2.0 if bracing else 5.0)
+		_contact_yaw_velocity = clampf(_contact_yaw_velocity + side * (0.25 if bracing else 0.8), -1.5, 1.5)
+		_emit_event("chain_hit")
+	speed = Vector2(velocity.x, velocity.z).length()
+	return true
+
+
+func _apply_contact_rotation(normal: Vector3, relative_velocity: Vector3, closing: float, source: String, softness: float = 1.0) -> void:
+	var right: Vector3 = _contact_right()
+	var side: float = normal.dot(right)
+	_linked_impact(closing, side, source)
+	var lateral: float = relative_velocity.dot(right)
+	# Exactly centred, parallel hits have little lever arm. Oblique/front-
+	# quarter hits turn predictably from their actual side and approach.
+	var lever: float = clampf(side + lateral / maxf(20.0, closing) * 0.22, -1.0, 1.0)
+	if _frame_contact_point.is_finite() and is_instance_valid(linked_frame):
+		# Contact yaw is subtracted from heading by the controller.
+		lever = clampf(-(_frame_contact_point - position).cross(normal).dot(frame_up if _is_route_network() else Vector3.UP) / 2.5, -1.0, 1.0)
+	var unsettled: bool = drifting or absf(velocity.dot(right)) > 8.0 or absf(_contact_yaw_velocity) > 0.5
+	if absf(lever) < 0.06:
+		_contact_stats["last_contact"] = {"source": source, "closing_speed": closing, "lever": lever, "spin": false, "unsettled": unsettled}
+		return
+	var spin: bool = (closing > 27.0 and absf(lever) > 0.48 and unsettled) or (closing > 47.0 and absf(lever) > 0.65)
+	if softness < 0.5:
+		spin = spin and closing > 58.0
+	if spin and not _contact_recovering:
+		_contact_yaw_velocity = signf(lever) * clampf(2.8 + closing * 0.035, 3.0, 5.1)
+		_contact_recovering = true
+		_contact_recovery_elapsed = 0.0
+		_contact_stats["spinouts"] = int(_contact_stats.get("spinouts", 0)) + 1
+		drift_charge = 0.0
+		drift_stage = 0
+		_emit_event("contact_spinout")
+	elif not _contact_recovering:
+		_contact_yaw_velocity = clampf(_contact_yaw_velocity + lever * clampf(closing * 0.027, 0.03, 1.1) * softness, -1.5, 1.5)
+	# Minor impacts during a recovery can move the body, but never restart
+	# the spin timer. Severe recovery is bounded even in a dense pack.
+	_contact_stats["last_contact"] = {"source": source, "closing_speed": closing, "lever": lever, "spin": spin, "unsettled": unsettled}
+
+
+func _resolve_body_impulse(other: GlyphRacer, normal: Vector3) -> void:
+	var relative: Vector3 = velocity - other.velocity
+	var closing: float = -relative.dot(normal)
+	var id: int = other.get_instance_id()
+	var other_id: int = get_instance_id()
+	var sustained: bool = _contact_pairs.has(id) or other._contact_pairs.has(other_id)
+	_contact_pairs[id] = CONTACT_PAIR_GUARD
+	other._contact_pairs[other_id] = CONTACT_PAIR_GUARD
+	if closing <= 0.0:
+		return
+	# Equal-mass impulse: normal restitution .4 for a fresh contact; a
+	# sustained overlap only cancels inward motion, preventing pinball loops.
+	var impulse: Vector3 = normal * closing * (0.5 if sustained else 0.7)
+	velocity += impulse
+	other.velocity -= impulse
+	if sustained:
+		_contact_stats["repeated_impact_suppression"] = int(_contact_stats.get("repeated_impact_suppression", 0)) + 1
+		other._contact_stats["repeated_impact_suppression"] = int(other._contact_stats.get("repeated_impact_suppression", 0)) + 1
+		return
+	var key: String = "hard_hits" if closing > 12.0 else "brushes"
+	_contact_stats[key] = int(_contact_stats.get(key, 0)) + 1
+	other._contact_stats[key] = int(other._contact_stats.get(key, 0)) + 1
+	if closing > 12.0:
+		drift_charge = 0.0
+		drift_stage = 0
+		other.drift_charge = 0.0
+		other.drift_stage = 0
+	_apply_contact_rotation(normal, relative, closing, "racer")
+	other._apply_contact_rotation(-normal, -relative, closing, "racer")
+	if closing > 4.0:
+		_emit_event("bounce" if not _contact_recovering else "contact_spinout")
+		other._emit_event("bounce" if not other._contact_recovering else "contact_spinout")
+
+
+func _wall_response(incoming: Vector3, outward_normal: Vector3, road: Dictionary) -> Vector3:
+	_wall_touch_frame = true
+	_wall_contact_gap = 0.0
+	var outward: float = incoming.dot(outward_normal)
+	if outward <= 0.0:
+		return incoming
+	var mode: String = "normal"
+	if _track.has_method("wall_bumper_side_at"):
+		mode = str(_track.call("wall_bumper_side_at", float(road.get("distance", route_distance)), signf(float(road.get("offset", lateral_offset)))))
+	elif _track.has_method("wall_bumper_at"):
+		mode = str(_track.call("wall_bumper_at", float(road.get("distance", route_distance))))
+	var planar_up: Vector3 = frame_up if _is_route_network() else Vector3.UP
+	var vertical: Vector3 = planar_up * incoming.dot(planar_up)
+	var planar: Vector3 = incoming - vertical
+	var before: float = planar.length()
+	var angle: float = clampf(outward / maxf(0.01, before), 0.0, 1.0)
+	var sustained: bool = _wall_major_active
+	var restitution: float = 0.48
+	var retention: float = 0.92
+	var yaw_scale: float = 1.0
+	match mode:
+		"soft":
+			restitution = 0.12
+			retention = 0.982 - angle * 0.025
+			yaw_scale = 0.18
+		"reactive":
+			restitution = 0.58
+			retention = 0.978 - angle * 0.10
+			yaw_scale = 1.0
+	if sustained:
+		restitution = 0.0
+		# Padding loses momentum once at first impact, then applies a small
+		# time-based scrape drag. Repeating the initial loss every frame turns
+		# a recoverable mistake into a slow sticky rail at high frame rates.
+		if mode in ["soft", "reactive"]:
+			retention = exp(-(0.10 if mode == "soft" else 0.22) * _contact_step_dt)
+	var outgoing: Vector3 = (planar - outward_normal * outward * (1.0 + restitution)) * retention
+	# The bumper can redirect momentum and dissipate energy, never add it.
+	if outgoing.length() > before:
+		outgoing = outgoing.normalized() * before
+	_contact_stats["last_wall"] = {"mode": mode, "pre_speed": before, "post_speed": outgoing.length(), "angle": angle, "suppressed": sustained, "continuous_duration": _wall_continuous}
+	if outward > 3.0:
+		if sustained:
+			_contact_stats["repeated_impact_suppression"] = int(_contact_stats.get("repeated_impact_suppression", 0)) + 1
+		else:
+			_wall_major_active = true
+			_contact_stats["wall_contacts"] = int(_contact_stats.get("wall_contacts", 0)) + 1
+			var key: String = "hard_hits" if outward > 18.0 else "brushes"
+			_contact_stats[key] = int(_contact_stats.get(key, 0)) + 1
+			_apply_contact_rotation(-outward_normal, planar, outward, "wall", yaw_scale)
+			drift_charge = 0.0
+			drift_stage = 0
+			_emit_event("bounce" if not _contact_recovering else "contact_spinout")
+			_wall_cooldown = 0.5
+	return outgoing + vertical
+
+

@@ -1,0 +1,56 @@
+class_name RogueLabProgression
+extends RefCounted
+## Progression metadata only. Existing form resolvers still own combat rules.
+const VERSION := 1
+
+static func monk_nodes() -> Array[Dictionary]:
+	return [
+		_node(RogueLabItems.MONK_EMPTY_CUP_SKILL, "Meditation", "Core", true),
+		_node(RogueLabItems.MONK_STONE_PALM_STANCE, "Stance", "Core", true),
+		_node(RogueLabItems.MONK_PALM_STRIKE_SKILL, "Technique", "Core", true),
+		_node(RogueLabItems.MONK_DASH_SKILL, "Movement", "Core", true),
+		_node(RogueLabItems.MONK_STRIKING_BELL_SKILL, "Meditation", "Offense", false, 1, [RogueLabItems.MONK_EMPTY_CUP_SKILL, RogueLabItems.MONK_PALM_STRIKE_SKILL]),
+		_node(RogueLabItems.MONK_TURNING_PALM_STANCE, "Stance", "Parry", false, 1, [RogueLabItems.MONK_STONE_PALM_STANCE, RogueLabItems.MONK_PALM_STRIKE_SKILL]),
+		_node(RogueLabItems.MONK_RECEDING_REED_STANCE, "Stance", "Positioning", false, 1, [RogueLabItems.MONK_STONE_PALM_STANCE, RogueLabItems.MONK_DASH_SKILL]),
+		_node(RogueLabItems.MONK_ROUNDHOUSE_SKILL, "Technique", "Offense", false, 2, [RogueLabItems.MONK_STRIKING_BELL_SKILL, RogueLabItems.MONK_PALM_STRIKE_SKILL]),
+		_node(RogueLabItems.MONK_RETURNING_BREATH_SKILL, "Technique", "Positioning", false, 2, [RogueLabItems.MONK_RECEDING_REED_STANCE, RogueLabItems.MONK_DASH_SKILL]),
+	]
+
+static func _node(id: StringName, kind: String, branch: String, baseline: bool, cost: int = 0, prerequisites: Array = []) -> Dictionary:
+	return {"id": id, "name": RogueLabItems.display_name(id), "kind": kind, "branch": branch, "baseline": baseline, "cost": cost, "prerequisites": prerequisites, "description": RogueLabItems.short_description(id)}
+
+static func node(id: StringName) -> Dictionary:
+	for entry: Dictionary in monk_nodes():
+		if entry.id == id:
+			return entry
+	return {}
+
+static func is_monk_ability(id: StringName) -> bool:
+	return not node(id).is_empty()
+
+static func baseline_ids() -> Array[StringName]:
+	var ids: Array[StringName] = []
+	for entry: Dictionary in monk_nodes():
+		if entry.baseline:
+			ids.append(entry.id)
+	return ids
+
+static func can_unlock(id: StringName, unlocked: Dictionary, points: int) -> bool:
+	var entry := node(id)
+	if entry.is_empty() or entry.baseline or bool(unlocked.get(id, false)) or points < int(entry.cost):
+		return false
+	for prerequisite: StringName in entry.prerequisites:
+		if not bool(unlocked.get(prerequisite, false)):
+			return false
+	return true
+
+static func ability_category(id: StringName) -> String:
+	var entry := node(id)
+	if not entry.is_empty():
+		return entry.kind
+	if RogueLabItems.is_consumable_item(id):
+		return "Consumable"
+	if RogueLabItems.is_class_skill(id):
+		return "Technique"
+	return "Equipment active"
+

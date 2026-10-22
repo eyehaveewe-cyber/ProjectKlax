@@ -1,0 +1,31 @@
+name: Publish tested game packages
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'releases/**'
+      - '.github/workflows/publish-packages.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: klax-packages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble and verify tested packages
+        run: |
+          cat releases/windows-parts/ProjectKlax-Windows.zip.part* > releases/ProjectKlax-Windows.zip
+          cd releases
+          sha256sum --check SHA256SUMS.txt
+          unzip -t ProjectKlax-Windows.zip
+          unzip -t ProjectKlax-Web.zip
+      - name: Publish downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view v0.1.0 >/dev/null 2>&1 || gh release create v0.1.0 --target "$GITHUB_SHA" --title "Project Klax 0.1" --notes "First playable xenobiology campaign: six worlds, twelve species, rover expeditions, specimen lab and two ending recommendations. WebGL tested; Windows build exported but not executed on Windows."
+          gh release upload v0.1.0 releases/ProjectKlax-Windows.zip releases/ProjectKlax-Web.zip releases/SHA256SUMS.txt --clobber
