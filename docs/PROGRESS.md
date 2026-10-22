@@ -1,5 +1,9 @@
 # Project Klax progress
 
+## Editable source delivery, 22 October 2026
+
+Added an explicit `ProjectKlax-Godot-Source.zip` release download and README import instructions. The archive contains the tracked Godot project, scenes, scripts, assets, tests and provenance, without exported game binaries. The release workflow rebuilds and uploads it with a separate SHA-256 checksum. `project.godot` remains at the repository root for cloning or GitHub's source ZIP download.
+
 ## 0.1 initial campaign, 22 October 2026
 
 The empty destination repository now contains a Godot 4.7.2 game with a mission deck, six planetary survey regions, twelve species, specimen analysis, equipment progression and two ending recommendations. The initial scope is one connected research campaign.
