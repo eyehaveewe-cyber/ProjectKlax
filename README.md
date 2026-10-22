@@ -8,6 +8,7 @@ Explore abandoned planetary colonies as a xenobiology field researcher. Observe 
 
 ## Start playing
 
+- [Editable Godot source package](https://github.com/eyehaveewe-cyber/ProjectKlax/releases/download/v0.1.0/ProjectKlax-Godot-Source.zip): extract the ZIP, open Godot 4.7.2, select **Import**, and choose `ProjectKlax/project.godot`. Press **F5** to run or edit the scenes, scripts and assets. This package includes the complete project and requires no add-ons.
 - [Windows package](https://github.com/eyehaveewe-cyber/ProjectKlax/releases/download/v0.1.0/ProjectKlax-Windows.zip): extract the entire ZIP and run `ProjectKlax.exe`. Keep its accompanying `.pck` file beside it.
 - [Web package](releases/ProjectKlax-Web.zip): extract the ZIP and serve its folder with a local HTTP server, for example `python -m http.server 8000`. Open `http://localhost:8000`. Opening `index.html` directly from disk does not load the Godot Web build correctly.
 - From source: import `project.godot` in **Godot 4.7.2**, then press **F5**. No add-ons are required.
@@ -82,6 +83,8 @@ This is a complete first campaign loop with a small, bounded ecological simulati
 Verification includes 182 native integration checks and 17 checks against the actual Web export, including keyboard/mouse collection, extraction, analysis, save reload and rover travel. Read [progress and verification](docs/PROGRESS.md), [game design](docs/DESIGN.md), and [exact source lineage](docs/SOURCE_LINEAGE.md). Source projects were inspected and copied selectively; their repositories were not changed.
 
 ## Build and test
+
+Rebuild the editable source package with `python3 tools/package_source.py`. It includes tracked project files, assets, tests, source provenance and documentation, and excludes exported binaries and editor caches.
 
 ```sh
 godot --headless --path . --editor --import --quit
