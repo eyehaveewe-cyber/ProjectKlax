@@ -7,7 +7,7 @@ const VERSION := 1
 static func fresh() -> Dictionary:
 	return {"version":VERSION,"science":0,"selected_planet":0,"selected_crew":0,
 		"completed":[],"research":{},"upgrades":{},"relays":[],"ending":"",
-		"samples":[],"visited":{},"expeditions":0,"rescues":0,"logs":[],"muted":false}
+		"samples":[],"surveys":[],"visited":{},"expeditions":0,"rescues":0,"logs":[],"muted":false}
 
 static func valid(data:Variant) -> bool:
 	if not data is Dictionary or data.get("version",0) != VERSION:
@@ -31,6 +31,9 @@ static func valid(data:Variant) -> bool:
 		for flag in ["scanned","sampled","analyzed"]:
 			if not data.research[key].get(flag) is bool:
 				return false
+	if not data.get("surveys",[]) is Array: return false
+	for value in data.get("surveys",[]):
+		if not (value is int or value is float) or int(value)<0 or int(value)>5: return false
 	for key in ["completed","relays"]:
 		for value in data[key]:
 			if not (value is int or value is float) or int(value)<0 or int(value)>5:
@@ -55,7 +58,7 @@ static func load_campaign(path:String=PATH) -> Dictionary:
 			var result:Dictionary = fresh()
 			result.merge(parsed,true)
 			# JSON numbers are floats in Godot. Array.has uses strict numeric types.
-			for key in ["completed","relays","samples"]:
+			for key in ["completed","relays","samples","surveys"]:
 				var ids:Array = []
 				for value in result[key]:
 					if not int(value) in ids:

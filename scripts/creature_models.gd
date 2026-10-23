@@ -1,17 +1,16 @@
 extends RefCounted
-## Meshes execute Zendelves' original actor-models.ts constructors. See source-provenance.
-## The walk, limb, tail and wing motion below is adapted from its renderer.ts.
+## Original Klax wildlife lives in xeno_models.gd. The researcher mesh and
+## biped animation below retain the Zendelves conversion and joint pivots.
 
-const MODEL_NAMES := ["spider", "octopus", "plant_hound", "slime_hound", "bat", "dryad"]
 const Catalog = preload("res://scripts/catalog.gd")
+const Xeno = preload("res://scripts/xeno_models.gd")
 static var _mesh_cache: Dictionary = {}
 
 static func create_creature(species_index: int) -> Node3D:
 	var index := posmod(species_index, 12)
 	var species: Dictionary = Catalog.species()[index]
-	var model_name: String = MODEL_NAMES[int(species["model"])]
-	var model := _create(model_name, species["color"], false)
-	model.set_meta("model_kind", model_name)
+	var model := Xeno.create(index, species["color"])
+	model.set_meta("model_kind", "xeno")
 	model.set_meta("phase", float(index) * 0.63)
 	return model
 
@@ -98,6 +97,9 @@ static func _create(model_name: String, tint: Color, researcher: bool) -> Node3D
 	return root
 
 static func animate_creature(node: Node3D, time: float, moving: bool, alert: bool) -> void:
+	if node.has_meta("xeno_id"):
+		Xeno.animate(node,time,moving,alert)
+		return
 	var phase: float = float(node.get_meta("phase", 0.0))
 	var pace := sin(time * (12.0 if alert else 8.0) + phase) * (1.0 if moving else 0.0)
 	var model_kind: String = node.get_meta("model_kind", "")

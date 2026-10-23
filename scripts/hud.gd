@@ -44,7 +44,7 @@ class SurveyMap extends Control:
 		draw_circle(pp, 5.5, Color(0.45, 1.0, 0.9, 0.18))
 		draw_circle(pp, 2.8, Color("e8f0ec"))
 		draw_string(font, Vector2(center.x - 4, 12), "N", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("93a9b4"))
-		draw_string(font, Vector2(10, size.y - 2), "100 m  /  □ LANDER", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("93a9b4"))
+		draw_string(font, Vector2(-28, size.y - 2), "L ship  D deposit  S site  G tether", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("93a9b4"))
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -234,7 +234,10 @@ func show_hub(state: Dictionary, planets: Array, species: Array, upgrades: Array
 	launch.disabled = selected == 5 and relays.size() < 5
 	mission.add_child(launch)
 	var tools: HBoxContainer = _row(mission)
-	var lab: Button = _button("Specimen lab", "lab")
+	var waiting := 0
+	for entry: Dictionary in state.get("research",{}).values():
+		if bool(entry.get("sampled",false)) and not bool(entry.get("analyzed",false)): waiting+=1
+	var lab: Button = _button("Specimen lab (%d ready)" % waiting, "lab")
 	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tools.add_child(lab)
 	var journal: Button = _button("Field journal", "journal")
@@ -291,7 +294,7 @@ func show_hub(state: Dictionary, planets: Array, species: Array, upgrades: Array
 func _meter(parent: Node, label: String, color: Color) -> Dictionary:
 	var row: HBoxContainer = _row(parent)
 	row.add_theme_constant_override("separation", 8)
-	var name_label: Label = _label(label, 11, MUTED)
+	var name_label: Label = _label(label, 13, MUTED)
 	name_label.custom_minimum_size.x = 60
 	row.add_child(name_label)
 	var bar := ProgressBar.new()
@@ -303,7 +306,7 @@ func _meter(parent: Node, label: String, color: Color) -> Dictionary:
 	bar.add_theme_stylebox_override("background", _style(Color("263d48"), Color("263d48"), 0, 3))
 	bar.add_theme_stylebox_override("fill", _style(color, color, 0, 3))
 	row.add_child(bar)
-	var value: Label = _label("100", 12, color)
+	var value: Label = _label("100", 14, color)
 	value.custom_minimum_size.x = 36
 	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(value)
@@ -322,20 +325,20 @@ func show_field(snapshot: Dictionary) -> void:
 	var objective_box: VBoxContainer = _column(objective_panel, 4)
 	fields.mode = _tag("SURVEY")
 	objective_box.add_child(fields.mode)
-	fields.objective = _label("", 14, PALE, true)
+	fields.objective = _label("", 16, PALE, true)
 	objective_box.add_child(fields.objective)
 	var supply_panel: PanelContainer = _panel(content, 1, 0, 1, 0, Vector4(-270, 22, -22, 116))
 	var supply_box: VBoxContainer = _column(supply_panel, 4)
 	fields.supply = _label("", 15, ORANGE)
 	supply_box.add_child(fields.supply)
-	fields.weather = _label("", 12, MUTED, true)
+	fields.weather = _label("", 14, MUTED, true)
 	supply_box.add_child(fields.weather)
-	var target_panel: PanelContainer = _panel(content, 0.5, 1, 0.5, 1, Vector4(-235, -248, 235, -109))
+	var target_panel: PanelContainer = _panel(content, 0.5, 1, 0.5, 1, Vector4(-300, -220, 300, -109))
 	fields.target_panel = target_panel
 	var target_box: VBoxContainer = _column(target_panel, 5)
-	fields.target = _label("", 19, CYAN)
+	fields.target = _label("", 20, CYAN, true)
 	target_box.add_child(fields.target)
-	fields.target_detail = _label("", 13, MUTED, true)
+	fields.target_detail = _label("", 17, MUTED, true)
 	target_box.add_child(fields.target_detail)
 	var scan := ProgressBar.new()
 	scan.show_percentage = false
@@ -345,12 +348,15 @@ func show_field(snapshot: Dictionary) -> void:
 	scan.add_theme_stylebox_override("fill", _style(CYAN, CYAN, 0, 3))
 	target_box.add_child(scan)
 	fields.scan = scan
-	fields.message = _label("", 15, PALE, true)
+	var nav_panel: PanelContainer = _panel(content,0.5,0,0.5,0,Vector4(-305,124,305,181))
+	fields.navigation = _label("",17,ORANGE,true)
+	nav_panel.add_child(fields.navigation)
+	fields.message = _label("", 18, PALE, true)
 	content.add_child(fields.message)
 	fields.message.anchor_left = 0.25
 	fields.message.anchor_right = 0.75
-	fields.message.anchor_top = 0.17
-	fields.message.anchor_bottom = 0.25
+	fields.message.anchor_top = 0.25
+	fields.message.anchor_bottom = 0.34
 	fields.message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	fields.message.add_theme_color_override("font_shadow_color", Color.BLACK)
 	fields.message.add_theme_constant_override("shadow_offset_x", 1)
@@ -370,13 +376,13 @@ func show_field(snapshot: Dictionary) -> void:
 	var controls: PanelContainer = _panel(content, 0, 1, 1, 1, Vector4(22, -92, -22, -19))
 	var controls_box: VBoxContainer = _column(controls, 4)
 	var buttons: HBoxContainer = _row(controls_box)
-	for item: Array in [["Pulse [Space]", "pulse"], ["Lure [Q]", "lure"], ["Rover [R]", "mount"], ["Station [B]", "camp"], ["Tactical [Tab]", "tactical"], ["Journal", "journal"], ["Help", "help"], ["Extract", "extract"]]:
+	for item: Array in [["Pulse [Space]", "pulse"], ["Lure [Q]", "lure"], ["Rover [R]", "mount"], ["Station [B]", "camp"], ["Tactical [Tab]", "tactical"], ["Journal", "journal"], ["Help", "help"], ["Ship [X]", "extract"]]:
 		var button: Button = _button(item[0], item[1])
 		button.add_theme_font_size_override("font_size", 12)
 		button.custom_minimum_size.y = 30
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		buttons.add_child(button)
-	controls_box.add_child(_label("WASD move  ·  E scan / recover  ·  F sample  ·  Shift sprint / boost  ·  Esc menu", 11, MUTED))
+	controls_box.add_child(_label("E scan / deposit  ·  F sample  ·  C crouch  ·  G tether  ·  Shift sprint / boost  ·  X return at lander  ·  Esc pause", 14, MUTED))
 	fields.rover = _label("", 12, ORANGE)
 	content.add_child(fields.rover)
 	fields.rover.position = Vector2(28, 161)
@@ -392,13 +398,14 @@ func update_field(snapshot: Dictionary) -> void:
 		var value: float = float(snapshot.get(key, 100))
 		fields[key].bar.value = value
 		fields[key].value.text = str(ceili(value))
-	fields.supply.text = "%d RP    /    %d SAMPLES" % [int(snapshot.get("science", 0)), int(snapshot.get("cargo", 0))]
+	fields.supply.text = "%d RP · %d CARGO" % [int(snapshot.get("science", 0)), int(snapshot.get("cargo", 0))]
+	fields.navigation.text = str(snapshot.get("navigation",""))
 	fields.weather.text = str(snapshot.get("weather", "Calm"))
 	fields.target.text = str(snapshot.get("target", "No specimen selected"))
 	fields.target_detail.text = str(snapshot.get("target_detail", "Approach a lifeform. Hold E to study it."))
 	fields.scan.value = float(snapshot.get("scan_progress", 0))
 	fields.message.text = str(snapshot.get("message", ""))
-	fields.rover.text = "ROVER  /  BOOST %d%%  /  HULL %d%%\nLEFT %d%%   RIGHT %d%%" % [int(snapshot.get("boost", 100)), int(snapshot.get("rover_hull", 100)), int(snapshot.get("left_module", 100)), int(snapshot.get("right_module", 100))] if bool(snapshot.get("rover", false)) else "ON FOOT  /  RESEARCHER"
+	fields.rover.text = "ROVER  /  BOOST %d%%  /  HULL %d%%\nLEFT %d%%   RIGHT %d%%" % [int(snapshot.get("boost", 100)), int(snapshot.get("rover_hull", 100)), int(snapshot.get("left_module", 100)), int(snapshot.get("right_module", 100))] if bool(snapshot.get("rover", false)) else ("CROUCHED  /  C TO STAND" if bool(snapshot.get("crouched",false)) else "ON FOOT  /  C CROUCH · G TETHER")
 	fields.map.player = snapshot.get("player", Vector2.ZERO)
 	fields.map.markers = snapshot.get("markers", [])
 	fields.map.queue_redraw()
@@ -416,7 +423,7 @@ func _screen_panel(title: String, subtitle: String) -> VBoxContainer:
 	titles.add_child(_tag("PROJECT KLAX / RESEARCH DIVISION"))
 	titles.add_child(_label(title, 31))
 	header.add_child(_button("← Back", "close"))
-	box.add_child(_label(subtitle, 14, MUTED, true))
+	box.add_child(_label(subtitle, 16, MUTED, true))
 	_line(box)
 	return box
 
@@ -434,10 +441,12 @@ func show_journal(state: Dictionary, species: Array) -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	box.add_child(scroll)
+	var journal_body: VBoxContainer = _column(scroll,14)
+	journal_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var grid := GridContainer.new()
 	grid.columns = 3
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(grid)
+	journal_body.add_child(grid)
 	for i in range(species.size()):
 		var organism: Dictionary = species[i]
 		var id: int = int(organism.get("id", i))
@@ -457,14 +466,27 @@ func show_journal(state: Dictionary, species: Array) -> void:
 			card.add_child(_label(str(organism.get("clue", "")), 13, PALE, true))
 			if bool(entry.get("analyzed", false)):
 				card.add_child(_label("Adaptation: " + str(organism.get("adaptation", "")), 12, CYAN, true))
-	box.add_child(_label("INHERITED SYSTEMS  /  Tilebean ecology · Zen Elysium weather · Zendelves creatures · ASCII Racer rover · Barrel Roll carrier", 11, MUTED, true))
+	journal_body.add_child(_label("Recovered transmissions",24,PALE))
+	var logs: Array = state.get("logs",[])
+	if logs.is_empty():
+		journal_body.add_child(_label("Recover and extract a relay to preserve its transmission here. Field toasts remain brief.",17,MUTED,true))
+	for log: Variant in logs:
+		journal_body.add_child(_label(str(log),18,PALE,true))
+	var surveys: Array = state.get("surveys",[])
+	if not surveys.is_empty():
+		journal_body.add_child(_label("Habitat surveys",24,PALE))
+		var catalog = preload("res://scripts/catalog.gd")
+		for id: Variant in surveys:
+			var place: Dictionary = catalog.planets()[int(id)]
+			journal_body.add_child(_label(str(place.site)+". "+str(place.hook),18,MUTED,true))
+	box.add_child(_label("INHERITED SYSTEMS  /  Tilebean ecology · Zen Elysium weather · Zendelves researcher · ASCII Racer rover · Barrel Roll carrier", 11, MUTED, true))
 
 func show_lab(state: Dictionary, species: Array) -> void:
 	_clear("lab")
-	var box: VBoxContainer = _screen_panel("Specimen lab", "Arrange a recovered culture's assay. Research rewards unlock ship and suit improvements.")
+	var box: VBoxContainer = _screen_panel("Specimen lab", "1. Select a saved culture.  2. Analyze now, or play the optional assay.  3. Buy upgrades on the mission deck.")
 	var stats: HBoxContainer = _row(box)
 	stats.add_child(_label("%d RESEARCH POINTS" % int(state.get("science", 0)), 20, ORANGE))
-	var note: Label = _label("Only extracted samples can be analyzed.", 13, MUTED)
+	var note: Label = _label("Deposited or extracted cultures are saved here.", 15, MUTED)
 	note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	stats.add_child(note)
@@ -499,7 +521,7 @@ func show_lab(state: Dictionary, species: Array) -> void:
 	if count == 0:
 		_spacer(list, 35)
 		list.add_child(_label("The lab is waiting for its first specimen.", 25, PALE, true))
-		list.add_child(_label("Deploy to a planet, approach a lifeform and hold E to observe it. Press F to collect a sample, then return to the lander to extract safely.", 17, MUTED, true))
+		list.add_child(_label("Deploy to a planet, approach a lifeform and hold E to observe it. Press F to collect. E at a cyan D console saves cargo. X at the lander returns to this lab.", 17, MUTED, true))
 		_spacer(list)
 	box.add_child(_label("FIELD PROTOCOL  /  Observe first. Keep a safe distance from predators. A calm subject yields a cleaner sample.", 12, CYAN, true))
 
@@ -519,8 +541,8 @@ func show_overlay(title: String, body: String, buttons: Array) -> void:
 	var box: VBoxContainer = _column(panel, 15)
 	box.add_child(_tag("PROJECT KLAX / EXPEDITION CONTROL"))
 	box.add_child(_label(title, 30, PALE, true))
-	var description: Label = _label(body, 16, MUTED, true)
-	description.custom_minimum_size.x = 540
+	var description: Label = _label(body, 18, PALE, true)
+	description.custom_minimum_size.x = 580
 	box.add_child(description)
 	_line(box)
 	for i in range(buttons.size()):

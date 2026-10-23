@@ -34,9 +34,9 @@ def main() -> None:
         target = destination / ("ProjectKlax.exe" if platform == "windows" else "index.html")
         run(args.godot, "--export-release", "Windows" if platform == "windows" else "Web", str(target))
         if platform == "windows":
-            instructions = "PROJECT KLAX 0.1\n\nExtract this entire folder, then run ProjectKlax.exe. Keep ProjectKlax.pck beside it.\n\nWASD move, E scan/recover, F sample, R rover, Space pulse, Q lure, B field station, Tab tactical, X extract near lander. Esc pauses. H opens the manual. M toggles sound.\n\nCampaign saves live in Godot's user data folder for Project Klax. Surface sorties restart on launch; observations and extracted research are permanent.\n"
+            instructions = "PROJECT KLAX 0.2\n\nExtract this entire folder, then run ProjectKlax.exe. Keep ProjectKlax.pck beside it.\n\nWASD move, E scan/recover, F sample, R rover, Space pulse, Q lure, B field station, Tab tactical, X extract near lander. Esc pauses. H opens the manual. M toggles sound.\n\nCampaign saves live in Godot's user data folder for Project Klax. Surface sorties restart on launch; observations and extracted research are permanent.\n"
         else:
-            instructions = "PROJECT KLAX 0.1 / WEB\n\nServe this folder through HTTP, not file://. With Python installed, run:\n  python -m http.server 8000\nThen open http://localhost:8000 in a WebGL2 browser.\n\nNo account, API key, build step, or network assets are needed. This export does not require cross-origin isolation headers. Saves are local to this browser and origin. See the in-game Field manual for controls.\n"
+            instructions = "PROJECT KLAX 0.2 / WEB\n\nServe this folder through HTTP, not file://. With Python installed, run:\n  python -m http.server 8000\nThen open http://localhost:8000 in a WebGL2 browser.\n\nNo account, API key, build step, or network assets are needed. This export does not require cross-origin isolation headers. Saves are local to this browser and origin. See the in-game Field manual for controls.\n"
         (destination / "PLAY.txt").write_text(instructions)
         archive = release / f"ProjectKlax-{'Windows' if platform == 'windows' else 'Web'}.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as output:

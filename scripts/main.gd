@@ -40,6 +40,9 @@ var effects:Array[Dictionary] = []
 var lures:Array[Dictionary] = []
 var stations:Array[Dictionary] = []
 var mounted:bool = false
+var crouched:bool = false
+var tether_trip:Dictionary = {}
+var deposited:int = 0
 var health:float = 100.0
 var oxygen:float = 100.0
 var energy:float = 100.0
@@ -215,6 +218,9 @@ func _start_expedition() -> void:
 	mode = "FIELD"
 	paused = false
 	mounted = false
+	crouched = false
+	tether_trip.clear()
+	deposited = 0
 	tactical = false
 	tactical_ap = 3
 	tactical_recharge = 0.0
@@ -236,7 +242,7 @@ func _start_expedition() -> void:
 	target = {}
 	state.expeditions = int(state.expeditions)+1
 	_save()
-	_notify("Hold E near a life form to scan. Return to the glowing lander circle with your samples.",8.0)
+	_notify("E: scan. F: sample. Deposit at a cyan console; X at the lander returns to the ship.",7.0)
 	hud.show_field(_snapshot())
 	camera.position = player.position + Vector3(0,camera_distance*0.78,camera_distance)
 	camera.look_at(player.position)
@@ -337,6 +343,9 @@ func _physics_process(delta:float) -> void:
 		sound.intensity = 0.8 if health<35.0 else (0.5 if mounted else 0.2)
 
 func _update_movement(dt:float) -> void:
+	if not tether_trip.is_empty():
+		_advance_tether(dt)
+		return
 	var forward:float = float(Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP))-float(Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN))
 	var side:float = float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT))-float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT))
 	var boost:bool = Input.is_physical_key_pressed(KEY_SHIFT)
@@ -361,21 +370,21 @@ func _update_movement(dt:float) -> void:
 			_notify("Rover disabled. Recover on foot, or repair at the lander.")
 	else:
 		move_direction = Vector3(side,0,-forward).normalized()
-		var speed:float = 8.0 if boost else 5.2
+		var speed:float = 2.6 if crouched else (8.0 if boost else 5.2)
 		var proposed:Vector3 = player.position+move_direction*speed*dt
-		if not world.is_blocked(proposed,0.55):
+		if not world.is_blocked(proposed,0.55,0.65 if crouched else 1.8):
 			player.position = proposed
 		else:
 			var slide_x:Vector3 = player.position+Vector3(move_direction.x,0,0)*speed*dt
 			var slide_z:Vector3 = player.position+Vector3(0,0,move_direction.z)*speed*dt
-			if not world.is_blocked(slide_x,0.55):
+			if not world.is_blocked(slide_x,0.55,0.65 if crouched else 1.8):
 				player.position = slide_x
-			if not world.is_blocked(slide_z,0.55):
+			if not world.is_blocked(slide_z,0.55,0.65 if crouched else 1.8):
 				player.position = slide_z
 		player.position.y = world.ground_height(Vector2(player.position.x,player.position.z))
 		if move_direction.length()>0.1:
 			player.rotation.y = lerp_angle(player.rotation.y,atan2(move_direction.x,move_direction.z),minf(dt*12.0,1.0))
-			if boost:
+			if boost and not crouched:
 				ecology.disturb(player.position,dt*0.025)
 		Models.animate_researcher(player,field_time,player.position.distance_to(previous)>0.005)
 
@@ -389,6 +398,7 @@ func _update_creatures(dt:float) -> void:
 		c.cooldown = maxf(0.0,float(c.cooldown)-dt)
 		var hostile:bool = info.temperament in ["territorial","predator"]
 		var alert_range:float = 15.0 if info.temperament=="predator" else 8.0
+		if crouched: alert_range *= 0.75
 		if int(state.selected_crew)==1:
 			alert_range *= 0.72
 		c.alert = hostile and distance<alert_range and float(c.calm)<=0.0 and float(c.stun)<=0.0
@@ -410,7 +420,7 @@ func _update_creatures(dt:float) -> void:
 					direction = (player.position-node.position).normalized()
 					move_speed = 3.5 if info.temperament=="predator" else 2.7
 				elif float(c.cooldown)<=0.0 and float(c.windup)<=0.0:
-					c.windup = 1.1
+					c.windup = 1.5 if int(c.species)==6 else 1.1
 					c.attack_pos = player.position
 					c.ring.visible = true
 					c.ring.material_override = _material(Color("ff9e65"),true)
@@ -442,6 +452,29 @@ func _update_creatures(dt:float) -> void:
 		else:
 			c.windup = 0.0
 			c.alert = false
+		if not bool(c.alert) and float(c.stun)<=0.0 and float(c.calm)<=0.0:
+			var home_delta: Vector3 = c.home-node.position
+			match int(c.species):
+				2: # Strides align with the mineral lattice, not free pursuit.
+					if absf(direction.x)>absf(direction.z): direction.z = 0.0
+					else: direction.x = 0.0
+				3,7: # Sail circles a resonator; mantle drifts with the ash front.
+					var angle: float = field_time*(0.28 if int(c.species)==3 else 0.1)+float(c.phase)
+					var orbit: Vector3 = c.home+Vector3(sin(angle),0,cos(angle))*(5.5 if int(c.species)==3 else 8.0)
+					direction = (orbit-node.position).normalized()
+					move_speed = 1.7 if int(c.species)==3 else 0.8
+				4,9: # Heat bells and filter reefs remain close to their host site.
+					direction = home_delta.normalized() if home_delta.length()>1.3 else Vector3.ZERO
+					move_speed = 0.45
+				6: move_speed = 0.7 # Heavy ceramic carrier; louder warning, faster charge.
+				8: # Brine pilgrim moves in pulses between osmotic rests.
+					move_speed = 2.0 if fmod(field_time+float(c.phase),5.0)<2.5 else 0.0
+				10:
+					ecology.restore(node.position,dt*0.015)
+					move_speed = 0.65
+				11: move_speed = 0.8
+		if bool(c.alert) and int(c.species)==6: move_speed = 3.7
+		if bool(c.alert) and int(c.species)==9: direction = Vector3.ZERO
 		direction.y = 0.0
 		var candidate:Vector3 = node.position+direction*move_speed*dt
 		if not world.is_blocked(candidate,0.7):
@@ -478,7 +511,7 @@ func _update_target() -> void:
 			target = {"kind":"creature","id":c.id,"species":c.species,"distance":d,"creature":c}
 	for point:Dictionary in world.points:
 		var d:float = player.position.distance_to(point.position)
-		if d<4.5 and not _point_visited(str(point.id)):
+		if d<4.5 and (point.kind in ["deposit","tether"] or not _point_visited(str(point.id))):
 			if str(point.kind)=="relay" and relay_recovered:
 				continue
 			target = point.duplicate()
@@ -489,7 +522,7 @@ func _point_visited(id:String) -> bool:
 	return id in collected or id in state.visited.get(str(planet.id),[])
 
 func _scan(dt:float,instant:bool=false) -> bool:
-	if target.is_empty() or target.kind!="creature" or mounted:
+	if target.is_empty() or target.kind!="creature" or mounted or not tether_trip.is_empty():
 		return false
 	var record:Dictionary = _research(int(target.species))
 	if bool(record.scanned):
@@ -519,7 +552,7 @@ func _scan(dt:float,instant:bool=false) -> bool:
 	return false
 
 func _sample() -> bool:
-	if mounted or target.is_empty() or target.kind!="creature":
+	if mounted or not tether_trip.is_empty() or target.is_empty() or target.kind!="creature":
 		return false
 	var id:int = int(target.species)
 	var record:Dictionary = _research(id)
@@ -533,7 +566,7 @@ func _sample() -> bool:
 		_notify("Approach within 4 meters to collect. Lures calm shy and territorial animals.")
 		return false
 	if carried.size()>=2+_level("cargo"):
-		_notify("Sample racks full. Return to the lander and extract.")
+		_notify("Racks full. Deposit at a cyan D console, or press B to build a field station.")
 		return false
 	if bool(target.creature.alert):
 		_notify("Unsafe collection. Calm it with Q or stun it with Space.")
@@ -544,7 +577,7 @@ func _sample() -> bool:
 	target.creature.sample_taken = true
 	target.creature.calm = 6.0
 	field_science += 4
-	_notify("Live sample secured. It becomes permanent only after extraction.",5.0)
+	_notify("Sample in cargo. Deposit at a cyan D console to save it and free a rack.",5.0)
 	_ping(1100.0)
 	return true
 
@@ -559,6 +592,12 @@ func _interact() -> void:
 		_notify("Dismount with R to work at the site.")
 		return
 	var kind:String = str(target.kind)
+	if kind=="deposit":
+		_deposit()
+		return
+	if kind=="tether":
+		_tether()
+		return
 	var id:String = str(target.id)
 	if _point_visited(id):
 		return
@@ -569,6 +608,9 @@ func _interact() -> void:
 		relay_recovered = true
 		field_science += 15
 		_notify("Relay archive recovered. Return to the lander to transmit it.",7.0)
+	elif kind=="field_site":
+		field_science += 12
+		_notify(str(planet.site)+" surveyed. Habitat notes saved on extraction. J opens the journal.",6.0)
 	elif kind=="cache":
 		field_science += int(8.0*float(crew[int(state.selected_crew)].get("salvage_multiplier",1.0)))
 		oxygen = minf(100.0,oxygen+30.0)
@@ -576,7 +618,7 @@ func _interact() -> void:
 		_notify("Field cache recovered: supplies restored and research materials packed.")
 	else:
 		field_science += 6
-		_notify(str(planet.log),12.0)
+		_notify("Colony transmission recovered. Extract to keep it; read it in the journal.",5.0)
 	_burst(target.position,Color("f2d18b"),3.5)
 	_ping(740.0)
 
@@ -618,7 +660,84 @@ func _lure() -> bool:
 	_ping(430.0)
 	return true
 
+func _deposit() -> bool:
+	if mounted or not tether_trip.is_empty() or target.get("kind","")!="deposit" or float(target.get("distance",INF))>4.5:
+		return false
+	if carried.is_empty():
+		_notify("No cargo to deposit. Saved cultures await analysis aboard the ship.")
+		return false
+	if tactical and not _spend_order(0.0):
+		return false
+	var count := carried.size()
+	for id: int in carried:
+		_research(id).sampled = true
+		if not id in state.samples: state.samples.append(id)
+	# Pay only this cargo's provisional sample reward, never relay/site rewards.
+	var reward := count*4
+	field_science -= reward
+	state.science = int(state.science)+reward
+	deposited += count
+	carried.clear()
+	_save()
+	_notify("%d samples deposited and saved. Racks free. X at the lander, then open the lab." % count,6.0)
+	_burst(target.position,Color("79e6db"),2.8)
+	_ping(1100.0)
+	return true
+
+func _toggle_crouch() -> bool:
+	if mounted or not tether_trip.is_empty(): return false
+	if crouched and world.is_blocked(player.position,0.55,1.8):
+		_notify("Low ceiling. Crawl out before standing.")
+		return false
+	crouched = not crouched
+	player.scale.y = 0.35 if crouched else 1.0
+	_notify("Crouched. Service passages are accessible. C stands up." if crouched else "Standing. Shift sprints.")
+	return true
+
+func _tether() -> bool:
+	if mounted or not tether_trip.is_empty(): return false
+	for crossing: Dictionary in world.crossings:
+		for ends: Array in [[crossing.a,crossing.b],[crossing.b,crossing.a]]:
+			if player.position.distance_to(ends[0])>4.5: continue
+			if world.is_blocked(ends[1],0.55,1.8): continue
+			crouched = false
+			player.scale.y = 1.0
+			var cable := MeshInstance3D.new()
+			var mesh := CylinderMesh.new()
+			mesh.top_radius = 0.035
+			mesh.bottom_radius = 0.035
+			mesh.height = 1.0
+			mesh.radial_segments = 5
+			cable.mesh = mesh
+			cable.material_override = _material(Color("e8d3a4"),true)
+			world.add_child(cable)
+			tether_trip = {"start":player.position,"finish":ends[1],"pivot":crossing.pivot,"time":0.0,"cable":cable}
+			scan_progress = 0.0
+			_notify("Tether crossing. G swings back from the far bank.")
+			return true
+	_notify("Find a marked tether mast, then press G on foot.")
+	return false
+
+func _advance_tether(dt: float) -> void:
+	tether_trip.time = minf(1.4,float(tether_trip.time)+dt)
+	var t: float = float(tether_trip.time)/1.4
+	player.position = Vector3(tether_trip.start).lerp(tether_trip.finish,smoothstep(0,1,t))
+	player.position.y += sin(t*PI)*4.0
+	var cable: Node3D = tether_trip.cable
+	var end: Vector3 = player.position+Vector3(0,1.2,0)
+	var delta: Vector3 = Vector3(tether_trip.pivot)-end
+	cable.position = end+delta*0.5
+	cable.quaternion = Quaternion(Vector3.UP,delta.normalized())
+	cable.scale.y = delta.length()
+	if t>=1.0:
+		cable.queue_free()
+		tether_trip.clear()
+		player.position.y = world.ground_height(Vector2(player.position.x,player.position.z))
+
 func _camp() -> bool:
+	if not tether_trip.is_empty() or world.is_blocked(player.position,1.6):
+		_notify("Find open ground before deploying a field station.")
+		return false
 	if stations.size()>=2:
 		_notify("Two field stations already deployed on this expedition.")
 		return false
@@ -626,12 +745,16 @@ func _camp() -> bool:
 		return false
 	var pos:Vector3 = player.position
 	var ring := _ring(pos,6.0,Color("91e3b6"))
+	world.add_field_console(pos,"deposit-station-%d" % stations.size())
 	stations.append({"position":pos,"node":ring})
 	ecology.restore(pos,0.8)
-	_notify("Field station active. Rest inside the green circle to replenish oxygen and health.",6.0)
+	_notify("Station ready. Green circle restores oxygen. E at the cyan console deposits samples.",6.0)
 	return true
 
 func _mount() -> bool:
+	if crouched or not tether_trip.is_empty():
+		_notify("Stand outside the passage before boarding the rover.")
+		return false
 	if mounted:
 		mounted = false
 		rover.stop()
@@ -693,13 +816,15 @@ func _request_extract() -> void:
 
 func _finish_expedition(success:bool) -> void:
 	var id:int = int(planet.id)
-	var recovered:int = carried.size()
+	var recovered:int = carried.size()+deposited
 	if success:
 		for species_id:int in carried:
 			_research(species_id).sampled = true
 			if not species_id in state.samples:
 				state.samples.append(species_id)
 		state.science = int(state.science)+field_science
+		if "field-site" in collected and not int(planet.id) in state.get("surveys",[]):
+			state.surveys.append(int(planet.id))
 		if relay_recovered and not id in state.relays:
 			state.relays.append(id)
 			state.logs.append(str(planet.log))
@@ -719,9 +844,9 @@ func _finish_expedition(success:bool) -> void:
 	_save()
 	_build_hub()
 	_show_hub()
-	var summary:String = "%s\n\n%d live samples recovered. %d field research earned.\n\nObservations remain in the journal. Analyze recovered samples in the laboratory to learn their adaptations and fund equipment." % [str(planet.name),recovered,field_science]
+	var summary:String = "%s\n\n%d samples saved, including %d deposited in the field.\n%d research from extracted sites and cargo.\n\nNext: open the laboratory and analyze your cultures. Spend research on the mission deck." % [str(planet.name),recovered,deposited,field_science]
 	if not success:
-		summary = "The carrier recovered your researcher. Your observations survived, but carried samples and this sortie's recovered material were lost.\n\nNo upgrades or previous research were lost. Try a field station, a lure, or a shorter return route."
+		summary = "Your researcher was rescued. %d deposited samples are safe. Carried cargo and unextracted site data were lost.\n\nObservations, deposited cultures and previous research remain saved. Analyze cultures in the ship lab." % deposited
 	hud.show_overlay("EXTRACTION COMPLETE" if success else "EMERGENCY RESCUE",summary,[{"text":"Open laboratory","action":"lab","payload":null},{"text":"Return to mission deck","action":"close","payload":null}])
 	if success and id==5 and relay_recovered:
 		_final_decision()
@@ -833,6 +958,12 @@ func _command(action:String,payload:Variant=null) -> void:
 			if mode=="FIELD" and not paused: _lure()
 		"camp":
 			if mode=="FIELD" and not paused: _camp()
+		"crouch":
+			if mode=="FIELD" and not paused: _toggle_crouch()
+		"tether":
+			if mode=="FIELD" and not paused: _tether()
+		"deposit":
+			if mode=="FIELD" and not paused: _deposit()
 		"mount":
 			if mode=="FIELD" and not paused: _mount()
 		"extract":
@@ -845,7 +976,7 @@ func _command(action:String,payload:Variant=null) -> void:
 			_finish_expedition(false)
 		"help":
 			paused = true
-			hud.show_overlay("FIELD MANUAL","WASD / arrows move. Hold E to scan nearby organisms; tap E to recover a ruin, relay or cache. F collects a scanned species within 4 meters.\n\nR boards the rover nearby. W/S throttle, A/D steer, Shift boost, Ctrl brake and drift. R dismounts.\n\nSpace emits a nonlethal pulse. Q places a calming lure. B deploys one of two oxygen stations. Tab slows time for three tactical orders. Mouse wheel adjusts the camera.\n\nReturn to the lander and press X to keep samples and relay data. Analyze samples aboard ship. Five relays reveal the final world. Six analyzed species let you make the final decision.\n\nEsc pauses. M toggles sound. F11 toggles fullscreen.",[{"text":"Continue","action":"resume","payload":null}])
+			hud.show_overlay("FIELD MANUAL","WASD / arrows move. Hold E to scan nearby organisms; tap E to recover a ruin, relay or cache. F collects a scanned species within 4 meters.\n\nR boards the rover nearby. W/S throttle, A/D steer, Shift boost, Ctrl brake and drift. R dismounts.\n\nSpace emits a nonlethal pulse. Q places a calming lure. B deploys one of two oxygen stations with sample consoles. E at a cyan D console saves cargo and frees racks.\n\nC crouches through low service passages. G swings between marked tether masts. The rover cannot enter either route. Tab slows time for three tactical orders. Mouse wheel adjusts the camera.\n\nReturn to the lander and press X to keep samples and relay data. Analyze samples aboard ship. Five relays reveal the final world. Six analyzed species let you make the final decision.\n\nEsc pauses. M toggles sound. F11 toggles fullscreen.",[{"text":"Continue","action":"resume","payload":null}])
 		"ending":
 			state.ending = str(payload)
 			_save()
@@ -898,6 +1029,8 @@ func _unhandled_input(event:InputEvent) -> void:
 		KEY_E: _interact()
 		KEY_F: _sample()
 		KEY_R: _mount()
+		KEY_C: _toggle_crouch()
+		KEY_G: _tether()
 		KEY_SPACE: _pulse()
 		KEY_Q: _lure()
 		KEY_B: _camp()
@@ -918,31 +1051,65 @@ func _snapshot() -> Dictionary:
 			var record:Dictionary = _research(id)
 			target_name = "%s · %.1f m" % [str(info.name),float(target.distance)]
 			if bool(record.scanned):
-				detail = str(info.clue)+("  This individual was sampled." if bool(target.creature.get("sample_taken",false)) else "  F: collect within 4 m. Comparative samples earn material.")
+				detail = "Already sampled. Find another individual." if bool(target.creature.get("sample_taken",false)) else ("Alert: Q lure or Space pulse before F." if bool(target.creature.alert) else "F: collect within 4 m. Deposit at cyan D consoles.")
 			else:
-				detail = "Hold E to observe · "+str(info.temperament).capitalize()+" · "+str(info.diet)
+				detail = "Hold E to scan · "+str(info.temperament).capitalize()+". Keep clear of warning rings."
 		else:
 			target_name = str(target.get("title","Derelict archive"))
-			detail = "E · recover "+str(target.kind)+" data"
+			detail = "E: deposit cargo and free racks. Analysis is aboard ship." if target.kind=="deposit" else ("G: swing across. Park the rover here." if target.kind=="tether" else "E: recover site data. Extract to keep it.")
 	var markers:Array = [{"position":Vector2.ZERO,"color":Color.WHITE,"label":"L"},{"position":Vector2(rover.position.x,rover.position.z),"color":Color("8ab9ff"),"label":"R"}]
 	for point:Dictionary in world.points:
-		if not _point_visited(str(point.id)):
-			markers.append({"position":Vector2(point.position.x,point.position.z),"color":Color("f6d28a"),"label":"!" if str(point.kind)=="relay" else "+"})
+		if point.kind in ["deposit","tether"] or not _point_visited(str(point.id)):
+			var label: String = {"relay":"!","deposit":"D","field_site":"S","tether":"G"}.get(str(point.kind),"+")
+			markers.append({"position":Vector2(point.position.x,point.position.z),"color":Color("79e6db") if point.kind=="deposit" else Color("f6d28a"),"label":label})
 	for c:Dictionary in creatures:
 		if player.position.distance_to(c.node.position)<25.0:
 			markers.append({"position":Vector2(c.node.position.x,c.node.position.z),"color":Color("ff946f") if bool(c.alert) else Color("7ee5c0"),"label":""})
 	var observed:int = 0
 	for id in planet.species:
 		if bool(_research(int(id)).scanned): observed+=1
-	var objective:String = "Observe %d/2 species · %s · Samples %d/%d" % [observed,"Relay recovered: return to lander" if relay_recovered or int(planet.id) in state.relays else "Locate the relay [!]",carried.size(),2+_level("cargo")]
+	var objective:String = "Scanned %d/2 · Cargo %d/%d · %d deposited" % [observed,carried.size(),2+_level("cargo"),deposited]
+	var destination: Dictionary = _destination()
+	markers.append({"position":Vector2(destination.position.x,destination.position.z),"color":Color.WHITE,"label":">"})
 	var weather:Dictionary = ecology.weather_snapshot()
 	return {"planet":str(planet.name),"objective":objective,"health":health,"oxygen":oxygen,"energy":energy,
-		"science":int(state.science),"cargo":carried.size(),"target":target_name,"target_detail":detail,
+		"science":int(state.science),"cargo":carried.size(),"deposited":deposited,"navigation":destination.text,"crouched":crouched,"target":target_name,"target_detail":detail,
 		"scan_progress":scan_progress if not target.is_empty() and str(target.id)==scan_id else 0.0,
 		"message":message if message_time>0.0 else ecology.describe_at(player.position),"rover":mounted,"boost":float(rover.boost_energy),
 		"rover_hull":float(rover.hull),"left_module":float(rover.left_module),"right_module":float(rover.right_module),
 		"weather":str(weather.get("name","Calm")),"mode":"TACTICAL" if tactical else "SURVEY","tactical_ap":tactical_ap,
 		"time":field_time,"player":Vector2(player.position.x,player.position.z),"markers":markers}
+
+func _destination() -> Dictionary:
+	var pos := Vector3.ZERO
+	var title := "Lander [X]: return to ship, then analyze cultures"
+	var first: int = int(planet.species[0])
+	var second: int = int(planet.species[1])
+	if not bool(_research(first).scanned):
+		for c: Dictionary in creatures:
+			if int(c.species)==first:
+				pos = c.node.position
+				title = "Local life signal: hold E to scan"
+				break
+	elif not bool(_research(second).scanned):
+		pos = Vector3(world.habitat_center.x,0,world.habitat_center.y)
+		title = str(planet.site)+" [S]: trace the second life signal"
+	elif not _point_visited("field-site"):
+		pos = Vector3(world.habitat_center.x,0,world.habitat_center.y)
+		title = str(planet.site)+" [S]: recover habitat data"
+	elif not relay_recovered and not int(planet.id) in state.relays:
+		for point: Dictionary in world.points:
+			if point.kind=="relay": pos = point.position
+		title = "Relay [!]: recover the colony transmission"
+	elif not carried.is_empty():
+		var nearest := INF
+		for point: Dictionary in world.points:
+			if point.kind=="deposit" and player.position.distance_to(point.position)<nearest:
+				nearest = player.position.distance_to(point.position)
+				pos = point.position
+		title = "Console [D]: deposit samples with E"
+	var distance := Vector2(pos.x-player.position.x,pos.z-player.position.z).length()
+	return {"position":pos,"text":"%s · %d m" % [title,roundi(distance)]}
 
 func _publish_telemetry() -> void:
 	if not qa_enabled or not OS.has_feature("web"):
@@ -952,8 +1119,24 @@ func _publish_telemetry() -> void:
 	data.buttons = _visible_buttons(hud)
 	if is_instance_valid(player) and is_instance_valid(world):
 		data.merge({"x":player.position.x,"z":player.position.z,"health":health,"oxygen":oxygen,"energy":energy,
-			"mounted":mounted,"field_time":field_time,"cargo":carried.size(),"scan_progress":scan_progress,"target_id":str(target.get("id","")),
+			"mounted":mounted,"crouched":crouched,"tethering":not tether_trip.is_empty(),"deposited":deposited,"recovered_sites":collected,"navigation":_destination().text,"field_time":field_time,"cargo":carried.size(),"scan_progress":scan_progress,"target_id":str(target.get("id","")),
 			"target_kind":str(target.get("kind","")),"research":state.research,"creatures":creatures.size(),"ecology_rounds":ecology.rounds})
+		data.points = []
+		for point: Dictionary in world.points:
+			data.points.append({"kind":point.kind,"id":point.id,"x":point.position.x,"z":point.position.z})
+		data.obstacles = []
+		for obstacle: Dictionary in world.obstacles:
+			var record := {"x":obstacle.position.x,"z":obstacle.position.z}
+			if obstacle.has("half_size"):
+				record.merge({"half_x":obstacle.half_size.x,"half_z":obstacle.half_size.y,"clearance":obstacle.get("clearance",-1)})
+			else: record.radius = obstacle.radius
+			data.obstacles.append(record)
+		data.crawl = {"x":world.crawl_center.x,"z":world.crawl_center.y}
+		var crossing: Dictionary = world.crossings[0]
+		data.crossing = {"ax":crossing.a.x,"az":crossing.a.z,"bx":crossing.b.x,"bz":crossing.b.z}
+		data.fauna = []
+		for c: Dictionary in creatures:
+			data.fauna.append({"species":c.species,"x":c.node.position.x,"z":c.node.position.z,"sampled":c.sample_taken})
 		if not target.is_empty() and target.kind=="creature":
 			data.merge({"target_x":target.creature.node.position.x,"target_z":target.creature.node.position.z,"target_distance":target.distance,"target_species":target.species})
 	JavaScriptBridge.eval("window.__klaxQA = "+JSON.stringify(data)+";",true)

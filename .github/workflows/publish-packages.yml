@@ -1,11 +1,7 @@
-name: Publish tested game packages
+name: Build and publish tested Godot project
 on:
   push:
     branches: [main]
-    paths:
-      - 'releases/**'
-      - 'tools/package_source.py'
-      - '.github/workflows/publish-packages.yml'
   workflow_dispatch:
 permissions:
   contents: write
@@ -15,21 +11,38 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Package editable Godot source
-        run: python3 tools/package_source.py
-      - name: Assemble and verify tested packages
+      - name: Install Godot 4.7.2 and export templates
         run: |
-          cat releases/windows-parts/ProjectKlax-Windows.zip.part* > releases/ProjectKlax-Windows.zip
+          curl --fail --location --retry 3 -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.2-stable_linux.x86_64
+          echo '/tmp/godot' >> "$GITHUB_PATH"
+          curl --fail --location --retry 3 -o /tmp/templates.tpz https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          unzip -j /tmp/templates.tpz templates/version.txt templates/windows_release_x86_64.exe templates/web_nothreads_release.zip -d "$HOME/.local/share/godot/export_templates/4.7.2.stable"
+      - name: Import and test actual campaign
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --editor --import --quit
+          for suite in campaign playtest ecology vehicles assay; do
+            /tmp/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script "res://tests/test_${suite}.gd" 2>&1 | tee "/tmp/${suite}.log"
+            if grep -E 'SCRIPT ERROR:|ERROR:' "/tmp/${suite}.log"; then exit 1; fi
+          done
+      - name: Build matching Windows Web and editable source packages
+        run: |
+          python3 tools/package_release.py --godot /tmp/godot/Godot_v4.7.2-stable_linux.x86_64
+          python3 tools/package_source.py
           cd releases
           sha256sum --check SHA256SUMS.txt
-          unzip -t ProjectKlax-Windows.zip
-          unzip -t ProjectKlax-Web.zip
+          sha256sum --check SOURCE-SHA256SUMS.txt
+          unzip -t ProjectKlax-Godot-Source.zip
       - name: Publish downloads
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view v0.1.0 >/dev/null 2>&1 || gh release create v0.1.0 --target "$GITHUB_SHA" --title "Project Klax 0.1" --notes "First playable xenobiology campaign: six worlds, twelve species, rover expeditions, specimen lab and two ending recommendations. WebGL tested; Windows build exported but not executed on Windows."
-          gh release upload v0.1.0 releases/ProjectKlax-Windows.zip releases/ProjectKlax-Web.zip releases/SHA256SUMS.txt --clobber
-          gh release upload v0.1.0 releases/ProjectKlax-Godot-Source.zip releases/SOURCE-SHA256SUMS.txt --clobber
+          gh release view v0.2.0 >/dev/null 2>&1 || gh release create v0.2.0 --target "$GITHUB_SHA" --title "Project Klax 0.2 - Field research update" --notes "Playtest follow-up: sample deposit consoles, twelve original alien models, distant habitats, clearer field guidance, crawl passages and tether crossings. Full editable Godot 4.7.2 source included. Built from commit $GITHUB_SHA. Windows exported; execution on Windows remains unverified."
+          gh release upload v0.2.0 releases/ProjectKlax-Windows.zip releases/ProjectKlax-Web.zip releases/ProjectKlax-Godot-Source.zip releases/SHA256SUMS.txt releases/SOURCE-SHA256SUMS.txt --clobber

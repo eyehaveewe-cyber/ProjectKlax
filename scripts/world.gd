@@ -16,6 +16,10 @@ var _route_points: Array[Vector2] = []
 var _ruin_positions: Array[Vector2] = []
 var _cache_positions: Array[Vector2] = []
 var _barriers: Array[Array] = []
+var crossings: Array[Dictionary] = []
+var crawl_center := Vector2.ZERO
+var gap_center := Vector2.ZERO
+var habitat_center := Vector2.ZERO
 const RADIUS := 94.0
 
 func build(planet: Dictionary, seed_value: int) -> void:
@@ -32,14 +36,22 @@ func build(planet: Dictionary, seed_value: int) -> void:
 	_base = planet.get("color", Color("355951"))
 	_accent = planet.get("accent", Color("a6e7be"))
 	_biome = str(planet.get("biome", "moss"))
+	crossings.clear()
 	_layout()
+	habitat_center = _ruin_positions[1]
+	crawl_center = _ruin_positions[0] + Vector2(0,12)
+	gap_center = _choose_crossing()
 	_environment()
 	_terrain()
 	_landing_marks()
 	_route()
 	_relay(Vector3(_relay_position.x, ground_height(_relay_position), _relay_position.y))
 	_ruin(_ruin_positions[0], "archive", "Silent observation station")
-	_ruin(_ruin_positions[1], "greenhouse", "Broken containment garden")
+	_ruin(_ruin_positions[1], "greenhouse", str(planet.get("site", "Habitat research station")))
+	points[-1].kind = "field_site"
+	points[-1].id = "field-site"
+	_console(Vector3(-5,0,7), "deposit-lander")
+	_traversal_sites()
 	_ruin(_ruin_positions[2], "habitat", "Abandoned habitat")
 	_cache(_cache_positions[0], "cache-east", "Survey supply crate")
 	_cache(_cache_positions[1], "cache-west", "Lost field equipment")
@@ -89,6 +101,21 @@ func _layout() -> void:
 			_route_points = [Vector2.ZERO,Vector2(0,-9),Vector2(13,-20),Vector2(23,-37),Vector2(18,-47),_relay_position,Vector2(-12,-53),Vector2(-26,-43),Vector2(-27,-27),Vector2(-16,-15),Vector2(-7,-8),Vector2.ZERO]
 			_barriers = [[Vector2(-8,-25),Vector2(8,-25)],[Vector2(-7,-38),Vector2(7,-38)]]
 
+func _choose_crossing() -> Vector2:
+	var tangent := Vector2(-_relay_position.y,_relay_position.x).normalized()
+	# Keep a fissure's full footprint and both mast approaches away from
+	# research interiors, caches, landing clearance and the service tunnel.
+	for along: float in [0.5,0.7,0.3]:
+		for side: float in [-27.0,27.0,-40.0,40.0]:
+			var candidate := _relay_position*along+tangent*side
+			if candidate.length()<23.0 or candidate.length()>78.0: continue
+			if candidate.distance_to(crawl_center)<22.0: continue
+			var clear := true
+			for site: Vector2 in _ruin_positions+_cache_positions+[_relay_position]:
+				if candidate.distance_to(site)<18.0: clear = false
+			if clear: return candidate
+	return Vector2(-72,0)
+
 func _path_distance(pos: Vector2) -> float:
 	var distance := INF
 	for i in range(_route_points.size() - 1):
@@ -121,13 +148,23 @@ func ground_height(pos: Vector2) -> float:
 		"ash": rolling -= exp(-pow(pos.distance_to(Vector2(1,28)) / 19.0, 2.0)) * 3.1
 		"tidal": rolling += sin(pos.x * 0.08 + pos.y * 0.025) * 1.5
 		"heart": rolling += sin(dist * 0.09) * 1.25
-	return rolling * clearing
+	var height := rolling * clearing
+	var local := pos-gap_center
+	if absf(local.x)<5.0 and absf(local.y)<6.5:
+		height -= 7.0*(1.0-smoothstep(3.0,5.0,absf(local.x)))*(1.0-smoothstep(4.5,6.5,absf(local.y)))
+	return height
 
-func is_blocked(pos: Vector3, radius: float = 0.6) -> bool:
+func is_blocked(pos: Vector3, radius: float = 0.6, body_height: float = 1.8) -> bool:
 	if Vector2(pos.x, pos.z).length() > RADIUS - radius:
 		return true
 	for obstacle: Dictionary in obstacles:
 		var center: Vector3 = obstacle["position"]
+		if obstacle.has("half_size"):
+			var half: Vector2 = obstacle.half_size
+			if absf(pos.x-center.x)<half.x+radius and absf(pos.z-center.z)<half.y+radius:
+				if body_height>float(obstacle.get("clearance",-1.0)):
+					return true
+			continue
 		if Vector2(pos.x - center.x, pos.z - center.z).length() < radius + float(obstacle["radius"]):
 			return true
 	return false
@@ -348,6 +385,8 @@ func _scatter() -> void:
 	add_child(mote_node)
 
 func _reserved(xz: Vector2) -> bool:
+	if xz.length()<12.0: return true
+	if xz.distance_to(crawl_center)<12.0 or xz.distance_to(gap_center)<16.0: return true
 	if xz.distance_to(Vector2(8, -10)) < 4.0: return true
 	if _path_distance(xz) < 3.3: return true
 	for point: Dictionary in points:
@@ -388,10 +427,20 @@ func _flora(pos: Vector3, size: float) -> void:
 
 func _spawn_specimens(species: Array) -> void:
 	if species.is_empty(): species = [0, 1, 2]
-	var locations: Array[Vector2] = [Vector2(8, -10), Vector2(-11, -17), Vector2(19, -20), Vector2(31, -27), Vector2(-21, -35), Vector2(-34, -46), Vector2(12, -45), Vector2(20, -63), Vector2(-13, -64), Vector2(48, -8), Vector2(43, 18), Vector2(24, 42), Vector2(-13, 46), Vector2(-43, 22), Vector2(-54, -17)]
-	var rotation_angle := atan2(_relay_position.x, -_relay_position.y)
-	for i in range(1, locations.size()):
-		locations[i] = locations[i].rotated(rotation_angle)
+	# The second species occupies the distant habitat. Both species can no longer
+	# be harvested beside the landing pad. First grazer remains an introduction.
+	var locations: Array[Vector2] = []
+	for i in range(15):
+		if i==0:
+			locations.append(Vector2(8,-10))
+		elif i%2==1:
+			var angle := float(i)*2.4
+			var xz := habitat_center + Vector2(cos(angle),sin(angle))*(8.0+float(i%3)*2.5)
+			if xz.length()<36.0: xz = xz.normalized()*38.0
+			locations.append(xz)
+		else:
+			var angle := float(i)*1.9
+			locations.append(Vector2(cos(angle),sin(angle))*(22.0+float(i)*2.6))
 	for i in range(locations.size()):
 		var xz := locations[i]
 		var pos := Vector3(xz.x, ground_height(xz), xz.y)
@@ -402,6 +451,63 @@ func _spawn_specimens(species: Array) -> void:
 			xz = locations[i] + Vector2(sin(float(attempts) * 2.4), cos(float(attempts) * 2.4)) * (1.0 + float(attempts) * 0.4)
 			pos = Vector3(xz.x, ground_height(xz), xz.y)
 		specimen_spawns.append({"id": "specimen-%s-%s" % [planet_data.get("id", 0), i], "species": int(species[i % species.size()]), "position": pos})
+
+func _console(pos: Vector3, ident: String) -> void:
+	var p := pos
+	p.y = ground_height(Vector2(p.x,p.z))
+	points.append({"id":ident,"kind":"deposit","position":p,"title":"Sample deposit console"})
+	_box(p+Vector3(0,0.6,0),Vector3(1.1,1.2,0.75),Color("244652"))
+	_box(p+Vector3(0,1.25,0),Vector3(1.25,0.12,0.9),Color("79e6db"),0.4)
+	for i in range(3):
+		_cylinder(p+Vector3((i-1)*0.3,1.5,0),0.1,0.4,Color("b8f3e2"),6,0.2)
+	_sign(p+Vector3(0,2.5,0),"DEPOSIT [E]",Color("79e6db"))
+
+func add_field_console(pos: Vector3, ident: String) -> Vector3:
+	for offset: Vector3 in [Vector3(2,0,0),Vector3(-2,0,0),Vector3(0,0,2),Vector3(0,0,-2),Vector3.ZERO]:
+		var candidate := pos+offset
+		if not is_blocked(candidate,0.6):
+			_console(candidate,ident)
+			return candidate
+	return pos
+
+func _sign(pos: Vector3, text: String, color: Color) -> void:
+	var label := Label3D.new()
+	label.text = text
+	label.position = pos
+	label.font_size = 48
+	label.pixel_size = 0.012
+	label.modulate = color
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = false
+	add_child(label)
+
+func _traversal_sites() -> void:
+	# Low service tunnel: 0.9 m clearance, 3 m wide, real overhead blockage.
+	var p := Vector3(crawl_center.x,ground_height(crawl_center),crawl_center.y)
+	for side in [-1.0,1.0]:
+		_box(p+Vector3(side*2.1,0.9,0),Vector3(0.7,1.8,8.0),_base.lightened(0.2))
+		obstacles.append({"position":p+Vector3(side*2.1,0,0),"half_size":Vector2(0.35,4.0),"clearance":-1.0})
+	# Crossbars leave the researcher visible from the survey camera.
+	for z in [-3.0,0.0,3.0]:
+		_box(p+Vector3(0,1.1,z),Vector3(3.5,0.25,0.35),_accent)
+	obstacles.append({"position":p,"half_size":Vector2(1.75,3.5),"clearance":0.9})
+	_sign(p+Vector3(0,2.5,4.5),"SERVICE PASSAGE / C CROUCH",_accent)
+	_cache(crawl_center+Vector2(0,-6),"tunnel-core","Buried culture archive")
+	# A fissure is impassable on foot or in the rover. G swings between banks;
+	# a longer route around its end always remains available.
+	var a := Vector3(gap_center.x-7.0,0,gap_center.y)
+	var b := Vector3(gap_center.x+7.0,0,gap_center.y)
+	a.y = ground_height(Vector2(a.x,a.z))
+	b.y = ground_height(Vector2(b.x,b.z))
+	var pivot := (a+b)*0.5+Vector3(0,8.5,0)
+	crossings.append({"a":a,"b":b,"pivot":pivot})
+	obstacles.append({"position":Vector3(gap_center.x,0,gap_center.y),"half_size":Vector2(5,6.5),"clearance":-1.0})
+	for endpoint: Vector3 in [a,b]:
+		_cylinder(endpoint+Vector3(0,1.7,0),0.17,3.4,_accent,6,0.1)
+		_sign(endpoint+Vector3(0,3.8,0),"TETHER [G]",_accent)
+	_box(pivot,Vector3(15,0.3,0.3),_base.lightened(0.4))
+	for endpoint: Vector3 in [a,b]:
+		points.append({"id":"tether-%d" % points.size(),"kind":"tether","position":endpoint,"title":"Tether crossing [G]"})
 
 func _signature() -> void:
 	# Each world has a large silhouette behind the relay so bearings stay legible.
@@ -417,6 +523,17 @@ func _signature() -> void:
 	elif _biome == "ash":
 		for i in range(5):
 			_cone(pos + Vector3(float(i - 2) * 5.0, 0, 0), 3.8, 18.0 + float(i % 3) * 6, _base.darkened(0.4), 5)
+	elif _biome == "ice":
+		# Cryogenic towers and a collapsed elevated pipe, not another orbital ring.
+		for i in range(3):
+			_cylinder(pos+Vector3((i-1)*7.0,8,0),2.7,16+i*2,_base.lightened(0.22),10)
+			_ring_landmark(pos+Vector3((i-1)*7.0,14,0),3.4)
+	elif _biome == "tidal":
+		for i in range(4):
+			_box(pos+Vector3((i-1.5)*7,7,0),Vector3(1.7,14,3),_base.lightened(0.3))
+		_box(pos+Vector3(0,14,0),Vector3(28,1.2,5),_base.lightened(0.22))
+		for i in range(6):
+			_sphere(pos+Vector3((i-2.5)*4,6,0),1.2,_accent,8,4,0.2)
 	elif _biome == "glass":
 		for i in range(4):
 			var shard := _cone(pos + Vector3(float(i - 2) * 5.0, 0, 0), 3.0, 17.0 + float(i % 2) * 9, _accent.darkened(0.3), 5)
@@ -468,3 +585,11 @@ func _mesh(mesh: Mesh, pos: Vector3, color: Color, glow: float = 0.0) -> MeshIns
 	instance.material_override = _material(color, glow)
 	add_child(instance)
 	return instance
+
+func _ring_landmark(pos: Vector3, radius: float) -> void:
+	var mesh := TorusMesh.new()
+	mesh.inner_radius = radius-0.2
+	mesh.outer_radius = radius
+	mesh.rings = 20
+	mesh.ring_segments = 4
+	_mesh(mesh,pos,_accent,0.2)

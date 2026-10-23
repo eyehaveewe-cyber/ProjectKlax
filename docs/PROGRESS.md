@@ -1,5 +1,15 @@
 # Project Klax progress
 
+## 0.2 field research update, 23 October 2026
+
+Implemented the Klax playtest notes with visible sample deposit consoles, safe field deposits and reusable racks, twelve original alien model sets, distant second-species habitats, named research stations, clearer navigation and larger action text. Added crouching through low service passages and animated tether swings in both directions. Ice and tidal worlds have different large landmark structures. Original rover handling and scanner timing remain intact.
+
+The field deposit, extraction, lab and upgrade steps are explicit in the HUD and README. Long colony transmissions moved into the journal. Deposited cultures survive rescue; carried cargo and unextracted site data retain their original risk. Version 0.1 saves remain compatible. The campaign still has six worlds and twelve species.
+
+Verification: 182 campaign checks and 296 new playtest regression checks pass, along with ecology, vehicle and assay suites. The new suite checks actual spawn collision and reachable approaches to every site on every world. 22 browser keyboard and mouse checks pass, including deposits, analysis, reload and crouch input. Evidence is in `web-verification-v0.2.json`. Windows and Web export successfully in Godot 4.7.2; Windows execution remains unverified. [Implementation details and remaining scope](PLAYTEST_UPDATE.md) map each playtest finding to the change.
+
+The release workflow now imports and tests the editable project before generating current Windows, Web and Godot source downloads for v0.2.0. Committed exports under `releases/` remain the historical 0.1 build; current packages are release assets.
+
 ## Editable source delivery, 22 October 2026
 
 Added an explicit `ProjectKlax-Godot-Source.zip` release download and README import instructions. The archive contains the tracked Godot project, scenes, scripts, assets, tests and provenance, without exported game binaries. The release workflow rebuilds and uploads it with a separate SHA-256 checksum. `project.godot` remains at the repository root for cloning or GitHub's source ZIP download.

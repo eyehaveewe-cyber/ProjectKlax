@@ -26,8 +26,12 @@ func _near_species(id: int, distance: float = 3.0, occurrence: int = 0) -> Dicti
 		if index != occurrence:
 			index += 1
 			continue
-		game.player.position = creature.node.position + Vector3(distance, 0, 0)
-		game._update_target()
+		# Choose a clear approach rather than assuming the +X side has no site console.
+		for approach in range(16):
+			var angle := float(approach)*TAU/16.0
+			game.player.position = creature.node.position + Vector3(cos(angle),0,sin(angle))*distance
+			game._update_target()
+			if game.target.get("id","")==creature.id: break
 		_check(not game.target.is_empty() and game.target.get("id", "") == creature.id, "Actual targeting selects specimen %s" % creature.id)
 		creature.alert = false
 		return creature
